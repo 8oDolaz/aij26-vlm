@@ -1,0 +1,26 @@
+# Local env / tooling
+.venv/
+.vscode/
+.claude/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ipynb_checkpoints/
+.env
+
+# Large local state — never in git
+/data/
+/runs/
+/artifacts/
+
+# Submission payload filled by tools/pack_submission.py (code stays tracked)
+/submission/smolvlm2/
+/submission/action_expert/
+/submission/annotations.jsonl
+
+# Weights and bundles anywhere
+*.safetensors
+*.ckpt
+*.pt
+*.pth
+*.zip

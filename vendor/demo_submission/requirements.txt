@@ -1,0 +1,3 @@
+# Optional participant deps (ignored by judge metrics).
+torch
+transformers

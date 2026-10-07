@@ -1,0 +1,2 @@
+# Optional participant config (ignored by judge metrics).
+run_name: demo_submission
