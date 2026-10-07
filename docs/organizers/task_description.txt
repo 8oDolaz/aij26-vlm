@@ -1,0 +1,125 @@
+Task Description
+
+As part of the Fourth Competition Task, Participants are required to create a reproducible solution that takes robotic episodes containing images or video, original instructions, and related information as input and produces a dataset in a format suitable for fine-tuning the VLM backbone (SmolVLM2) of the SmolVLA model.
+
+Vision-Language-Action (VLA) models enable robots to execute instructions expressed in natural language. Such models must simultaneously understand the visual scene, relate observed events to the assigned task, and generate a sequence of control actions.
+
+One of the key components of a VLA model is the Vision-Language Model (VLM). It processes camera images and a textual instruction and extracts features that are subsequently used by the action generation module. A robot’s ability to operate under new conditions directly depends on how well the VLM understands objects, their states, spatial relationships, and task progress.
+
+Modern open robotic datasets contain large numbers of videos and object-interaction trajectories. However, their textual annotations are generally limited to a single high-level instruction for the entire episode. The data typically do not specify which subtask the robot is performing at a given moment, how far it has progressed, whether the action was completed successfully, why an error occurred, or what must be done to recover from it. Creating such annotations manually is costly and does not scale well.
+Problem Statement
+
+As part of the Competition, Participants are invited to develop an automated pipeline that converts raw robotic trajectories into training data for VLM adaptation. Each Participant independently determines which training signals to extract from the trajectories and how to represent them in the resulting dataset. For example, a solution may generate:
+
+    descriptions of the scene, objects, and their states;
+    spatial relationships between objects;
+    the current and next subtasks;
+    a decomposition of the original instruction into individual steps;
+    an estimate of task progress;
+    indicators of successful or unsuccessful task completion;
+    a description of the cause of an error;
+    recovery instructions following an error;
+    a brief description of a trajectory segment or the entire trajectory;
+    question–answer pairs concerning the observed scene and the robot’s actions.
+
+The above list is neither mandatory nor exhaustive. Participants may propose their own approaches to frame selection, construction of textual tasks, annotation generation, example filtering, and quality control.
+Robot states and actions may be used as an additional source of information when creating annotations. However, the solution must produce a vision-language dataset for VLM adaptation, rather than a new action dataset for training a VLA model for specific embodiments or a dataset for training a VLM to predict raw or discretized robotic trajectories.
+Solution Evaluation Procedure
+
+Participants independently run the complete data preparation and model training cycle:
+
+    create a vision-language dataset using the developed pipeline;
+    fine-tune the initial VLM backbone on the created dataset;
+    train the action expert using the resulting VLM;
+    prepare the final VLA model checkpoint for evaluation.
+
+VLM fine-tuning and action expert training are performed by Participants using their own computing resources. The Organizer fixes the initial checkpoints, model architecture, datasets for action expert training, parameters, and compute budget for both training stages. The established protocol may be modified only to the extent expressly permitted by the Competition Rules.
+Participants are provided with a public benchmark for development and local testing. It demonstrates the task format, model execution procedure, and scoring method; enables Participants to verify that their solution is compatible with the evaluation system; and provides an indicative score. Results on the public benchmark are not used to compile the public leaderboard.
+The public leaderboard is compiled based on the evaluation of the checkpoint submitted by a Participant on a private benchmark that is unavailable to Participants. It includes robotic scene understanding and control tasks that differ from the public benchmark examples. The private benchmark may include new objects, scene configurations, instruction wording, camera positions, execution errors, and recovery scenarios.
+A full run of a submitted solution, including dataset construction, VLM fine-tuning, and action expert training, requires substantial computing resources and is therefore not performed for every solution. The Organizer conducts a validation run of the complete pipeline:
+
+    at the final stage of the Competition for solutions eligible for prize-winning places;
+    additionally, where necessary to verify reproducibility or compliance with the Competition Rules.
+
+The validation run must reproduce the declared performance within the permitted tolerance. If a solution cannot be reproduced, violates the fixed protocol, or uses data or components unavailable to the Organizer, its result may be voided.
+The objective is to create a data preparation pipeline that enables a VLA model trained under the fixed protocol to outperform the initial baseline on the hidden tasks.
+The solution must be submitted as a ZIP archive with the following structure:
+
+
+submission.zip  
+├── README.md  
+├── requirements.txt  
+├── generate\_dataset.py  
+├── config.yaml  
+├── annotations.jsonl  
+├── src/  
+    └── complete solution source code  
+├── smolvlm2/  
+│ ├── config.json  
+│ ├── model.safetensors  
+│ ├── generation\_config.json  
+│ ├── processor\_config.json  
+│ ├── tokenizer\_config.json  
+│ ├── tokenizer.json  
+│ └── chat\_template.jinja  
+└── action\_expert/  
+    ├── config.json  
+    ├── model.safetensors  
+    ├── train\_config.json  
+    ├── policy\_preprocessor.json  
+    ├── policy\_postprocessor.json  
+    ├── policy\_preprocessor\_step\_\*.safetensors  
+    └── policy\_postprocessor\_step\_\*.safetensors
+
+The archive must contain:
+
+    generate_dataset.py – a script that automatically generates annotations from the provided datasets;
+    requirements.txt – a list of dependencies required to run the generator;
+    config.yaml – the data preparation pipeline configuration;
+    annotations.jsonl – the vision-language dataset created by the Participant;
+    src/ – all source code files referenced by generate_dataset.py;
+    smolvlm2/ – the final checkpoint of the fine-tuned VLM;
+    action_expert/ – the final checkpoint of the trained action expert;
+    README.md – a description of the solution and instructions for reproducing the result.
+
+The annotations.jsonl file must comply with the ShareGPT format. The original images and videos do not need to be copied into the solution: training examples must reference files from the dataset provided by the Organizer.
+
+Example of a single annotations.jsonl entry:
+
+
+{"messages": \[{"role": "user", "content": "\<image\>\\nWhat is the person doing with the object in their hands?"}, {"role": "assistant", "content": "A person's hands are holding a dark, rectangular object with a textured surface. The left hand grips the top-left corner while the right hand holds the bottom-right corner. The object is positioned in front of a large white sheet of paper that rests on a brown cardboard box. To the left of the box is a stack of clear plastic-wrapped items, and to the right is a blue plastic crate and a large paper bag. The hands appear to be manipulating or inspecting the object."}\], "images": \["/path/to/dataset/images/00000001.jpg"\]}
+
+The generator must support the following standard invocation:
+
+
+python generate\_dataset.py \\  
+    \--input /data/raw \\  
+    \--output /output/annotations.jsonl \\  
+    \--config config.yaml
+
+The pipeline must automatically process the provided robotic episodes, operate without internet access, and require no manual data annotation. Given fixed inputs, configuration, and random seed, the generated output must be reproducible.
+
+The SmolVLA architecture, action generation module, and final evaluation protocol may not be modified. The winning solution is the one that creates the most useful training data for VLM adaptation.
+Final Score
+
+The final solution score is based on the results of eight VLM benchmarks—ERQA, MMMU Val, MMMU-Pro Standard, MMMU-Pro Vision, BLINK, CrossPoint, MSMU, and EmbSpatial—and the performance score on a LIBERO-like robotic benchmark.
+For each VLM benchmark, the final accuracy metric normalized to the range from 0 to 1 is used. The VLM score is the arithmetic mean of the results on the eight benchmarks:
+VLM = (1 / 8) · Σ Accuracyᵢ
+The VLA score is the mean Success Rate across the tasks of the LIBERO-like robotic benchmark. Each task has equal weight.
+Score = 100 · (0.4 · VLM + 0.6 · VLA)
+Solutions are ranked by their unrounded Score values.
+Terms and Constraints
+
+Maximum number of submissions: 1 per day for the Participant or Participant Team (only successful submissions count; failed ones do not consume the limit).
+
+Script runtime limit: 210 minutes.
+
+Hardware: 16 × NVIDIA H100 GPU
+
+Private sharing of ideas, solutions, or code outside a single Participant Team is prohibited. If such sharing is identified, all solutions involved will be disqualified.
+
+Participants are prohibited from using, proprietary technologies (intellectual property to which exclusive rights are held by third parties and are not granted under an open-source license) that require paid acquisition of usage rights.
+
+A Participant or Participant Team may upload no more than one (1) solution per day from August 25, 2026 through October 20, 2026, inclusive. From among all uploaded solutions, the Participant or Participant Team must select three (3) final solutions to be considered in compiling the final leaderboard. One (1) of the three (3) solutions with the highest final metric value will be included in the final leaderboard. Solutions eligible for prize-winning places are additionally reviewed by the Organizer and the Partners for compliance with the Competition Rules.
+
+The period during which a Participant or Participant Team may select three (3) final solutions from among all solutions uploaded during the Competition and designate them on the Competition Website runs from August 25, 2026 (the Organizer will determine the start time at its discretion within the period from 00:00 to 18:00) through October 20, 2026, inclusive. To select the three (3) final solutions the Participant must use the relevant functionality of the Competition Website to check the box next to each selected solution. If the Participant or Participant Team does not select three (3) final solutions, the three (3) uploaded solutions with the highest metric values will be selected automatically.

@@ -1,0 +1,16 @@
+Data
+
+To solve the task, Participants independently download robotic and egocentric data from the following open sources:
+
+    BridgeData2, LeRobot v3 — commit b96f7216e3cff58007884656a81584c857c185ae
+    Fractal, LeRobot v3 — commit fc006b5dc812220645a2e6dd0b68a0a03bd0ac6c
+    Language Table, LeRobot v3 — commit d54542e0eebf8084edb10e2c67ef5b94bd41fcc4
+    Egocentric-100K — commit fae604b751b25337d6fd8c4c53e595910c28f68f
+
+The data comprise robotic episodes and egocentric video recordings that may be used to construct a vision-language dataset. The resulting dataset for VLM fine-tuning must be provided in ShareGPT JSONL format. The requirements for its structure and a sample record are provided in the documentation included in participant.zip.
+
+Participants are also provided with the following materials:
+
+    baseline.zip — a baseline pipeline for automatic image annotation using YOLOv8, SAM2, and a VLM;
+    participant.zip — code for fine-tuning SmolVLM2 on the generated ShareGPT JSONL dataset, subsequently training the SmolVLA action expert, and validating the solution locally;
+    submission.zip — an example of the final solution structure to be uploaded to the platform.
