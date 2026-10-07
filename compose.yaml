@@ -1,0 +1,45 @@
+# Long-lived dev container on the GPU server: start once, then shell in.
+#   cp .env.example .env && mkdir -p data runs
+#   docker compose up -d --build     # first build is long (CUDA 12.8 + torch + hf-libero)
+#   docker compose exec dev bash
+# The image is the organizers' vendor/participant/Dockerfile, unchanged; the kit lives in the image at /workspace.
+services:
+  dev:
+    build: ./vendor/participant
+    image: aij-robotics:latest
+    container_name: aij-dev
+    hostname: aij-dev
+    init: true
+    # Run as the host user so files written into the repo are not root-owned.
+    # For apt/pip installs: docker compose exec -u root dev bash
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+    working_dir: /repo
+    command: ["bash", "-c", "mkdir -p \"$$HOME\" && exec sleep infinity"]
+    environment:
+      HOME: /tmp/home
+      USER: dev
+      HF_HOME: /hf_cache
+      CUDA_HOME: /usr/local/cuda
+      MUJOCO_GL: egl
+      # "graphics" is needed for EGL rendering in LIBERO; the CUDA base image only enables compute,utility.
+      NVIDIA_DRIVER_CAPABILITIES: all
+      NVIDIA_VISIBLE_DEVICES: ${GPUS:-all}
+      TRITON_CACHE_DIR: /tmp/triton_cache_vla_hackathon
+    volumes:
+      # Whole repo, read-write: edit on the host or inside, both see the same files.
+      # Point kit configs' runtime.output_root at /repo/runs.
+      - .:/repo
+      # Datasets: kit configs use /data/vlm and /data/vla.
+      - ${DATA_DIR:-./data}:/data
+      - ${HF_CACHE:-~/.cache/huggingface}:/hf_cache
+    shm_size: 16gb
+    ulimits:
+      memlock: -1
+      stack: 67108864
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
