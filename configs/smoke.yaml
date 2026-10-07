@@ -1,6 +1,6 @@
 # Kit smoke test for the dev container (compose.yaml). Same as vendor/participant/configs/smoke.yaml,
-# but reads the kit's mini data from the repo mount and writes under /repo/runs, since the
-# container runs as the host user and can't write to the image's /workspace.
+# but reads the kit's mini data from the repo mount and writes under /repo/runs, so outputs
+# land in the repo on the host instead of inside the container.
 #   cd /workspace && ./scripts/run_pipeline.sh /repo/configs/smoke.yaml --smoke
 
 run_name: smoke_libero
