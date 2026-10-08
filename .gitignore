@@ -10,6 +10,7 @@ __pycache__/
 /data/
 /runs/
 /artifacts/
+/example/
 
 /submission/smolvlm2/
 /submission/action_expert/
