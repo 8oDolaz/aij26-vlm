@@ -7,6 +7,7 @@ import glob
 import shutil
 import sys
 from pathlib import Path
+import json
 
 import av
 import numpy as np
@@ -22,12 +23,13 @@ ROOT = REPO / "data" / "raw" / "bridge"                     # raw Bridge data
 OUT = REPO / "data" / "explore"                             # pictures 
 
 sys.path.insert(0, str(REPO / "submission" / "src"))
-from aijgen.signals.phases import label_phases              
+from aijgen import phases as ph
+
 
 FPS = 5
 CAMS = ["image_0", "image_1", "image_2", "image_3"]
-PHASE_COLORS = {"approach": "#9ecae1", "closing": "#fdae6b", "contact": "#e6550d",
-                "opening": "#a1d99b", "retreat": "#d9d9d9"}
+PHASE_COLORS = {"pre_grasp": "#9ecae1", "immobilization": "#fdae6b", "contact": "#e6550d",
+                "detach": "#a1d99b", "post_grasp": "#d9d9d9"}
 
 
 def load_meta_episodes() -> pd.DataFrame:
@@ -43,6 +45,12 @@ def load_frames_episode(episode: pd.Series) -> pd.DataFrame:
     df = pd.read_parquet(ROOT / f"data/chunk-{c:03d}/file-{f:03d}.parquet")
     df = df[df["episode_index"] == episode["episode_index"]].sort_values("frame_index")
     return df.reset_index(drop=True)
+
+
+def gripper_scale() -> float:
+    """Dataset-wide gripper range (p1..p99) from meta/stats.json."""
+    st = json.load(open(ROOT / "meta" / "stats.json"))["observation.state"]
+    return st["q99"][6] - st["q01"][6]
 
 
 def _flatten(x) -> list[float]:
@@ -100,7 +108,9 @@ def main():
     print("cameras present:", {c: camera_present(ep, c) for c in CAMS})
 
     g = state[:, 6]
-    phases = label_phases(g)
+    c = ph.closedness(g, closed_high=False, scale=gripper_scale())   # 0 = open .. 1 = closed
+    labels = ph.label(c) if c is not None else np.zeros(n, dtype=int)  # no grasp -> all pre_grasp
+    phases = [ph.PHASES[i] for i in labels]
     print("gripper:", np.round(g, 2).tolist())
     print("action[6]:", np.round(action[:, 6], 2).tolist())
     print("phases:", phases)

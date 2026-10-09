@@ -27,4 +27,4 @@ Demo weights can be verified with `cd artifacts/demo_submission && sha256sum -c 
 1. Generate data: `python submission/generate_dataset.py --input data/raw --output data/gen/<name> --config submission/config.yaml`
 2. Train and evaluate with the kit in `vendor/participant/` (see its README), using a config from `configs/`; outputs go to `runs/<id>/`
 3. Log the run in `docs/experiments.md`
-4. Pack: `tools/pack_submission.py` (planned) fills `submission/{smolvlm2,action_expert,annotations.jsonl}`, rewrites judge paths, and builds the ZIP into `artifacts/`
+4. Pack: `tools/pack_submission.py` builds `artifacts/<name>.zip` (code from `submission/` + weights, judge paths, bf16), then `tools/verify_submission.sh` checks it offline in the organizers' image (see `tools/README.md`)
