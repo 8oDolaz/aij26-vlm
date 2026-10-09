@@ -1,3 +1,4 @@
 # Optional participant deps (ignored by judge metrics).
+# pip install numpy pandas pyarrow av pillow matplotlib
 torch
 transformers
