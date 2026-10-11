@@ -13,8 +13,13 @@ A labeller abstains when the pair's gap is below its threshold (--contact-gap: f
 --depth-gap: fraction of the frame's 2nd..98th percentile depth range). Pairwise agreement where both decide shows
 which labels hold on this camera: run it on several cameras and sessions to see whether contact breaks with pose.
 
+An object resting on the surface reads about the same depth in its middle as on the surface just below it, so an
+object whose object and support depths differ by more than --consistency (same units as --depth-gap) is rejected
+and never paired. That drops boxes whose support patch lands on the arm or another object, and thin or hollow
+objects whose box is mostly background. Rejection is meant to be aggressive: there is far more data than we need.
+
 Writes to --out (default runs/depth_pairs/<camera>_<file>_<from>-<to>/):
-- detections.png: up to --sheet frames, boxes with labels | depth
+- detections.png: up to --sheet frames, boxes with labels | depth; green kept, red rejected, grey robot
 - pairs.png: up to --sheet pairs, half where labellers disagree (to see who is right), half where all agree;
   A is red, B is orange, dots mark contact points
 - pairs.jsonl: every pair with its normalised gaps and verdicts
@@ -114,7 +119,7 @@ def verdict(a, b, gap: float):
     return "A" if a > b else "B"
 
 
-def make_pairs(dets_per_frame, depths, times, contact_gap: float, depth_gap: float):
+def make_pairs(dets_per_frame, depths, times, contact_gap: float, depth_gap: float, consistency: float):
     pairs = []
     for i, (dets, depth) in enumerate(zip(dets_per_frame, depths)):
         h = depth.shape[0]
@@ -126,7 +131,8 @@ def make_pairs(dets_per_frame, depths, times, contact_gap: float, depth_gap: flo
             o["object"] = (object_depth(depth, o["box"]) - lo) / rng
             sup = support_depth(depth, o["box"])
             o["support"] = None if sup is None else (sup - lo) / rng
-        for a, b in itertools.combinations(objs, 2):
+            o["rejected"] = bool(o["support"] is None or abs(o["object"] - o["support"]) > consistency)
+        for a, b in itertools.combinations([o for o in objs if not o["rejected"]], 2):
             if iou(a["box"], b["box"]) > PAIR_IOU:
                 continue
             gaps = {k: verdict(a[k], b[k], contact_gap if k == "contact" else depth_gap) for k in LABELLERS}
@@ -139,7 +145,9 @@ def make_pairs(dets_per_frame, depths, times, contact_gap: float, depth_gap: flo
 def summarize(pairs, dets_per_frame):
     n_frames = len(dets_per_frame)
     n_objs = sum(sum(d["label"] != ROBOT for d in dets) for dets in dets_per_frame)
-    print(f"{n_frames} frames, {n_objs / n_frames:.1f} objects/frame, {len(pairs)} pairs")
+    n_rejected = sum(sum(d.get("rejected", False) for d in dets) for dets in dets_per_frame)
+    print(f"{n_frames} frames, {n_objs / n_frames:.1f} objects/frame, {n_rejected}/{n_objs} rejected, "
+          f"{len(pairs)} pairs")
     for k in LABELLERS:
         decided = sum(p["verdict"][k] is not None for p in pairs)
         print(f"  {k:8s} decides {decided}/{len(pairs)}")
@@ -193,9 +201,11 @@ def main():
     ap.add_argument("--queries", nargs="+", default=QUERIES, help="object names for OWLv2")
     ap.add_argument("--detector", default="google/owlv2-base-patch16-ensemble")
     ap.add_argument("--depth-model", default="depth-anything/Depth-Anything-V2-Base-hf")
-    ap.add_argument("--score", type=float, default=0.2, help="OWLv2 score threshold")
+    ap.add_argument("--score", type=float, default=0.5, help="OWLv2 score threshold")
     ap.add_argument("--contact-gap", type=float, default=0.03, help="min contact-point gap, fraction of height")
     ap.add_argument("--depth-gap", type=float, default=0.05, help="min depth gap, fraction of the frame's range")
+    ap.add_argument("--consistency", type=float, default=0.10,
+                    help="max object vs support depth difference, fraction of the frame's range")
     ap.add_argument("--batch", type=int, default=4)
     ap.add_argument("--sheet", type=int, default=12, help="frames and pairs on the contact sheets")
     ap.add_argument("--out", type=Path, help="output directory")
@@ -212,7 +222,7 @@ def main():
 
     dets_per_frame = detect(frames, args.detector, list(args.queries) + [ROBOT], args.score, args.batch)
     depths, _, _ = predict(frames, args.depth_model, args.batch)
-    pairs = make_pairs(dets_per_frame, depths, times, args.contact_gap, args.depth_gap)
+    pairs = make_pairs(dets_per_frame, depths, times, args.contact_gap, args.depth_gap, args.consistency)
     summarize(pairs, dets_per_frame)
 
     det_tiles = []
@@ -220,7 +230,7 @@ def main():
         img = cv2.cvtColor(frames[i], cv2.COLOR_RGB2BGR)
         for d in dets_per_frame[i]:
             x1, y1, x2, y2 = map(int, d["box"])
-            color = (128, 128, 128) if d["label"] == ROBOT else (0, 255, 0)
+            color = (128, 128, 128) if d["label"] == ROBOT else (0, 0, 255) if d.get("rejected") else (0, 255, 0)
             cv2.rectangle(img, (x1, y1), (x2, y2), color, 2)
             cv2.putText(img, f"{d['label']} {d['score']:.2f}", (x1, max(y1 - 8, 22)), FONT, 0.8, color, 2)
         det_tiles.append(tile(img, colorize(depths[i]), f"t={times[i]:.1f}s  {len(dets_per_frame[i])} boxes"))
