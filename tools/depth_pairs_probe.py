@@ -147,7 +147,7 @@ def summarize(pairs, dets_per_frame):
         both = [p for p in pairs if p["verdict"][x] and p["verdict"][y]]
         agree = sum(p["verdict"][x] == p["verdict"][y] for p in both)
         print(f"  {x} vs {y}: agree {agree}/{len(both)}" + (f" = {100 * agree / len(both):.0f}%" if both else ""))
-    usable = sum(len(set(p["verdict"].values())) == 1 and p["verdict"]["contact"] for p in pairs)
+    usable = sum(len(set(p["verdict"].values())) == 1 and p["verdict"]["contact"] is not None for p in pairs)
     print(f"  all three decide and agree: {usable} pairs = {usable / n_frames:.1f}/frame")
 
 
