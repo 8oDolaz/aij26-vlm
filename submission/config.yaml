@@ -1,2 +1,57 @@
 # Generator config: seed, dataset quotas, sample mix.
 seed: 0
+
+# Relative-depth Tier 1: BLINK-style point pairs (docs/relative_depth_plan.md, section 5).
+# Gap thresholds are in per-frame normalised disparity (p2..p98 -> 0..1), calibrated on NYU-v2 (section 2.2) with
+# Depth Anything V2; DA3's inverse depth uses the same scale, but the thresholds are not yet re-measured for DA3.
+depth_tier1:
+  seed: 0
+  depth_model: depth-anything/DA3-BASE   # Apache-2.0; any-view: all views of a moment go into one call
+  da3_src: example/depth-anything-3/src  # depth_anything_3 package (github.com/ByteDance-Seed/Depth-Anything-3)
+  da3_process_res: 504       # longest side DA3 sees (its default); 640x480 Bridge frames run at 504x378
+  segmenter: facebook/sam2.1-hiera-small
+  render_width: 512          # BLINK images are ~500 px wide; marker sizes scale with this
+  min_frame_std: 8.0         # skips blank frames of cameras an episode does not have
+  frames_span: [0.1, 0.9]    # source frames are spread over this part of each episode
+  datasets:
+    bridge:
+      # Depth is predicted from all views together; questions are asked on one of them, rotating over the views
+      views: [observation.images.image_0, observation.images.image_1, observation.images.image_2]
+      min_views: 3           # non-blank views needed at a source frame (many episodes only have image_0)
+      max_episodes: 50       # evenly spread over the episodes on disk with min_views views
+      min_length: 15
+      frames_per_episode: 2
+    fractal:
+      views: [observation.images.image]
+      min_views: 1
+      max_episodes: 25
+      min_length: 15
+      frames_per_episode: 2
+  points:
+    edge_radius: 4           # 9x9 window
+    edge_max: 0.10           # disparity range in the window, fraction of the frame range
+    erode_frac: 0.008        # keep points ~5 px (at 640 wide) inside their segment
+    border_frac: 0.05        # inner allowed rectangle: no point within 5% of width/height of the image border
+    min_segment_area: 0.002
+    large_segment_area: 0.25 # bigger segments (table, wall) count as background
+    background_disp: 0.20    # so do segments whose median normalised disparity is below this (far)
+    points_per_segment: 2
+    grid: [4, 6]             # rows, cols for pixels no SAM2 mask covers (bare table, counter)
+    min_cell_pixels: 50
+  pairs:
+    min_dist_frac: 0.0625    # 40 px at 640 wide
+    same_row_frac: 0.03      # |dy| below this fraction of the height = same row
+    gap: 0.15                # closer point lower in the image (NYU: ~98.9%)
+    gap_inconsistent: 0.25   # closer point higher (NYU: ~97%)
+    gap_same_row: 0.20       # (NYU: ~97.5%)
+    max_per_frame_per_group: 2
+    background_share: 0.15
+  stability:
+    enabled: true
+    offsets: [-2, -1, 1, 2]  # neighbouring frames, static camera
+    stability_change: 0.10   # a point that moved more than this in a neighbour is skipped there (arm, object)
+    stability_min_valid: 2
+  prompts:
+    p_dot: 0.2               # filled-dot markers instead of BLINK rings (free-form prompts only)
+    p_blink: 0.6             # BLINK prompt verbatim, ring markers
+    p_blink_farther: 0.1     # same, asking for the farther point
