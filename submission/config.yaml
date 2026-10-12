@@ -1,7 +1,10 @@
 # Generator config: seed, dataset quotas, sample mix.
 
 generators:
-  phase:
+  phase_qa:
+    enabled: true
     # where inside a phase run the question frame is sampled, as fractions of the run length
     frame_range: [0.25, 0.75]
     seed: 42
+    # ask only about these phases (names from aijgen.phases.PHASES)
+    labeled_phases: [immobilization, contact]

@@ -1,6 +1,6 @@
 """Look at one Bridge episode: gripper/xyz plot, phases, keyframes.
 
-python tools/explore_episode.py --episode 0
+python3 tools/explore_episode.py --data data/raw/bridge --out data/explore --episode 0
 """
 import argparse
 import glob
@@ -18,13 +18,11 @@ import matplotlib.pyplot as plt
 from PIL import Image
 
 
-REPO = Path(__file__).resolve().parents[1]                  # aij26-vlm/
-ROOT = REPO / "data" / "raw" / "bridge"                     # raw Bridge data
-OUT = REPO / "data" / "explore"                             # pictures 
 
+REPO = Path(__file__).resolve().parents[1]  
 sys.path.insert(0, str(REPO / "submission" / "src"))
-from aijgen import phases as ph
 
+from aijgen import phases as ph
 
 FPS = 5
 CAMS = ["image_0", "image_1", "image_2", "image_3"]
@@ -32,24 +30,24 @@ PHASE_COLORS = {"pre_grasp": "#9ecae1", "immobilization": "#fdae6b", "contact": 
                 "detach": "#a1d99b", "post_grasp": "#d9d9d9"}
 
 
-def load_meta_episodes() -> pd.DataFrame:
+def load_meta_episodes(root: Path) -> pd.DataFrame:
     '''
     return: table of all /meta
     '''
-    files = sorted(glob.glob(str(ROOT / "meta/episodes/**/*.parquet"), recursive=True))
+    files = sorted(glob.glob(str(root / "meta/episodes/**/*.parquet"), recursive=True))
     return pd.concat([pd.read_parquet(f) for f in files], ignore_index=True)
 
 
-def load_frames_episode(episode: pd.Series) -> pd.DataFrame:
+def load_frames_episode(root: Path, episode: pd.Series) -> pd.DataFrame:
     c, f = int(episode["data/chunk_index"]), int(episode["data/file_index"])
-    df = pd.read_parquet(ROOT / f"data/chunk-{c:03d}/file-{f:03d}.parquet")
+    df = pd.read_parquet(root / f"data/chunk-{c:03d}/file-{f:03d}.parquet")
     df = df[df["episode_index"] == episode["episode_index"]].sort_values("frame_index")
     return df.reset_index(drop=True)
 
 
-def gripper_scale() -> float:
+def gripper_scale(root: Path) -> float:
     """Dataset-wide gripper range (p1..p99) from meta/stats.json."""
-    st = json.load(open(ROOT / "meta" / "stats.json"))["observation.state"]
+    st = json.load(open(root / "meta" / "stats.json"))["observation.state"]
     return st["q99"][6] - st["q01"][6]
 
 
@@ -68,12 +66,12 @@ def camera_present(ep: pd.Series, cam: str) -> bool:
     return float(np.mean(mean)) > 0.02
 
 
-def read_frames(ep: pd.Series, cam: str, n: int) -> list:
+def read_frames(root: Path, ep: pd.Series, cam: str, n: int) -> list:
     """Return all n frames of the episode from the concatenated mp4."""
     key = f"videos/observation.images.{cam}"
     c, f = int(ep[f"{key}/chunk_index"]), int(ep[f"{key}/file_index"])
     t0 = float(ep[f"{key}/from_timestamp"])
-    path = ROOT / f"videos/observation.images.{cam}/chunk-{c:03d}/file-{f:03d}.mp4"
+    path = root / f"videos/observation.images.{cam}/chunk-{c:03d}/file-{f:03d}.mp4"
     frames = [None] * n
     with av.open(str(path)) as container:
         stream = container.streams.video[0]
@@ -92,13 +90,15 @@ def read_frames(ep: pd.Series, cam: str, n: int) -> list:
 
 def main():
     ap = argparse.ArgumentParser()
+    ap.add_argument("--data", type=Path, required=True, help="dataset root")
+    ap.add_argument("--out", type=Path, required=True, help="folder for pictures")
     ap.add_argument("--episode", type=int, default=0)
     ap.add_argument("--cam", default="image_0")
     args = ap.parse_args()
 
-    eps = load_meta_episodes()
+    eps = load_meta_episodes(args.data)
     ep = eps[eps["episode_index"] == args.episode].iloc[0]
-    rows = load_frames_episode(ep)
+    rows = load_frames_episode(args.data, ep)
     state = np.stack(rows["observation.state"].values)
     action = np.stack(rows["action"].values)
     n = len(rows)
@@ -108,14 +108,14 @@ def main():
     print("cameras present:", {c: camera_present(ep, c) for c in CAMS})
 
     g = state[:, 6]
-    c = ph.closedness(g, closed_high=False, scale=gripper_scale())   # 0 = open .. 1 = closed
+    c = ph.closedness(g, closed_high=False, scale=gripper_scale(args.data))   # 0 = open .. 1 = closed
     labels = ph.label(c) if c is not None else np.zeros(n, dtype=int)  # no grasp -> all pre_grasp
     phases = [ph.PHASES[i] for i in labels]
     print("gripper:", np.round(g, 2).tolist())
     print("action[6]:", np.round(action[:, 6], 2).tolist())
     print("phases:", phases)
 
-    out = OUT / f"ep{args.episode:05d}"
+    out = args.out / f"ep{args.episode:05d}"
     if out.exists():
         shutil.rmtree(out)
     out.mkdir(parents=True)
@@ -136,7 +136,7 @@ def main():
     fig.tight_layout(); fig.savefig(out / "signals.png", dpi=110); plt.close(fig)
 
     # frames
-    frames = read_frames(ep, args.cam, n)
+    frames = read_frames(args.data, ep, args.cam, n)
     missing = sum(f is None for f in frames)
     if missing:
         print(f"WARNING: {missing} frames not decoded")

@@ -1,13 +1,14 @@
 """Shared pieces for all question generators.
 
-A generator turns one Episode into a list of QA items. It never touches files or video:
-QA.frames are frame indices, and the caller saves the images.
+A generator turns one Episode into a list of Question items. It never touches files or video:
+Question.frames are frame indices, and the caller saves the images.
 """
 import zlib
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 
 import numpy as np
+import math
 
 LETTERS = "ABCD"
 
@@ -39,14 +40,30 @@ def stable_id(s: str) -> int:
     """Deterministic integer for a string (seeds for datasets)"""
     return zlib.crc32(s.encode("utf-8"))
 
+#забираем рандомный кадр из указанного диапазона
+def pick_frame(start: int, 
+               end: int, 
+               rng: np.random.Generator,
+               frame_range: tuple[float, float]) -> int:
+    """Random frame in the run [start, end] (end inclusive), restricted to frame_range fractions.
+    return: index of choisen episode
+    """
+    span = end - start
+    low_bound = start + math.ceil(frame_range[0] * span)
+    hight_bound = start + math.floor(frame_range[1] * span)
+    if low_bound > hight_bound:                                 
+        return (start + end) // 2
+    return int(rng.integers(low_bound, hight_bound + 1))
+
 
 class Generator(ABC):
     """Base class. Subclasses set `name` and implement `generate`."""
 
     name: str = ""                            
 
-    def __init__(self, cfg: dict, seed: int):
+    def __init__(self, cfg: dict):
         self.cfg = cfg 
+        self.frame_range = [0.25, 0.75]
         self.seed = int(cfg["seed"])                       
 
     def rng(self, ep: Episode) -> np.random.Generator:
@@ -63,11 +80,15 @@ class Generator(ABC):
     # helpers for subclasses
 
     @staticmethod
-    def mcq(question: str, correct: str, distractors: list[str],
+    def mcq(question: str, 
+            correct: str, #correct ans
+            distractors: list[str], #incorrect answers
             rng: np.random.Generator) -> tuple[str, str]:
-        """Shuffle options, return (question with lettered options + MCQ_SUFFIX, correct letter)."""
+        """Shuffle options, 
+        return (question with lettered options + instructions, correct letter).
+        """
         options = [correct, *distractors]
         options = [options[i] for i in rng.permutation(len(options))]
-        letter = LETTERS[options.index(correct)]
-        lines = "\n".join(f"{LETTERS[i]}. {o}" for i, o in enumerate(options))
+        letter = LETTERS[options.index(correct)] #correct letter
+        lines = "\n".join(f"{LETTERS[i]}. {o}" for i, o in enumerate(options))#  "A. Moving away\nB. Approaching\nC. Closing the gripper\nD. Releasing"
         return f"{question}\n{lines}\n{MCQ_SUFFIX}", letter
