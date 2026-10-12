@@ -243,15 +243,9 @@ def write_sheets(out: Path, samples: list[dict]):
             f.write(json.dumps(r) + "\n")
 
 
-def main():
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--input", type=Path, required=True, help="raw data root with bridge/, fractal/")
-    ap.add_argument("--output", type=Path, required=True)
-    ap.add_argument("--config", type=Path, default=Path(__file__).resolve().parents[3] / "config.yaml")
-    ap.add_argument("--relabel", action="store_true", help="use cache/ only, no models")
-    ap.add_argument("--max-episodes", type=int, help="override max_episodes per dataset")
-    args = ap.parse_args()
-    cfg = yaml.safe_load(args.config.read_text())["depth_tier1"]
+def generate(args, cfg: dict) -> dict:
+    """Writes everything listed in the module docstring to args.output and returns the report.
+    args has the CLI's fields: input, output, relabel, max_episodes."""
     args.output.mkdir(parents=True, exist_ok=True)
     funnel, timing = Counter(), Counter()
     t_start = time.perf_counter()
@@ -333,6 +327,19 @@ def main():
     (args.output / "report.json").write_text(json.dumps(report, indent=1))
     print(json.dumps({k: v for k, v in report.items() if k != "config"}, indent=1))
     print(f"wrote {len(selected)} samples to {args.output}")
+    return report
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--input", type=Path, required=True, help="raw data root with bridge/, fractal/")
+    ap.add_argument("--output", type=Path, required=True)
+    ap.add_argument("--config", type=Path, default=Path(__file__).resolve().parents[3] / "config.yaml")
+    ap.add_argument("--relabel", action="store_true", help="use cache/ only, no models")
+    ap.add_argument("--max-episodes", type=int, help="override max_episodes per dataset")
+    args = ap.parse_args()
+    cfg = yaml.safe_load(args.config.read_text())["depth_tier1"]
+    generate(args, cfg)
 
 
 if __name__ == "__main__":

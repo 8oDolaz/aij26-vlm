@@ -1,0 +1,29 @@
+# d1_depth_phase: SFT on depth-tier1 (BLINK-style closer point) + gripper-phase questions, then the default VLA stage.
+# Paths are inside the dev container (compose.yaml: repo at /repo, ./data at /data).
+#
+# 1. Generate (organizers' invocation; run from /repo so depth_tier1.da3_src resolves):
+#   docker compose run --rm dev python submission/generate_dataset.py \
+#     --input /data/raw --output /data/gen/d1_depth_phase/annotations.jsonl --config submission/config.yaml
+# 2. Train: our SFT template replaces the kit's full-SFT one (run_pipeline.py always reads configs/vlm_sft.yaml):
+#   docker compose run --rm -w /workspace \
+#     -v "$PWD/configs/vlm_sft/d1_depth_phase.yaml:/workspace/configs/vlm_sft.yaml:ro" \
+#     dev ./scripts/run_pipeline.sh /repo/configs/d1_depth_phase.yaml
+#   add --dry-run first to check paths and the generated configs; --skip-vla for VLM only.
+
+run_name: d1_depth_phase
+
+vlm:
+  protocol: full                     # -> configs/vlm_sft.yaml, i.e. configs/vlm_sft/d1_depth_phase.yaml mounted over it
+  data_path: /data/gen/d1_depth_phase/annotations.jsonl
+  eval_data_path: null
+  media_dir: /data/gen/d1_depth_phase   # image paths in the JSONL are relative to it
+
+vla:
+  suite: libero
+  dataset_dir: /data/vla             # HuggingFaceVLA/libero @ v3.0; kit default vla_libero.yaml
+
+runtime:
+  gpu_indices: [0]
+  output_root: /repo/runs
+  cache_dir: /repo/runs/cache/core
+  lerobot_home: /repo/runs/cache/lerobot

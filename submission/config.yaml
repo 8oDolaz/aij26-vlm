@@ -1,10 +1,17 @@
 # Generator config: seed, dataset quotas, sample mix.
+# python generate_dataset.py --input /data/raw --output /output/annotations.jsonl --config config.yaml
 seed: 0
+
+# Max records kept per source (null = all), sampled with the seed; then everything is shuffled together.
+mix:
+  depth_tier1: 2000
+  phase_qa: 3000
 
 # Relative-depth Tier 1: BLINK-style point pairs (docs/relative_depth_plan.md, section 5).
 # Gap thresholds are in per-frame normalised disparity (p2..p98 -> 0..1), calibrated on NYU-v2 (section 2.2) with
 # Depth Anything V2; DA3's inverse depth uses the same scale, but the thresholds are not yet re-measured for DA3.
 depth_tier1:
+  enabled: true
   seed: 0
   depth_model: depth-anything/DA3-BASE   # Apache-2.0; any-view: all views of a moment go into one call
   da3_src: example/depth-anything-3/src  # depth_anything_3 package (github.com/ByteDance-Seed/Depth-Anything-3)
@@ -18,13 +25,13 @@ depth_tier1:
       # Depth is predicted from all views together; questions are asked on one of them, rotating over the views
       views: [observation.images.image_0, observation.images.image_1, observation.images.image_2]
       min_views: 3           # non-blank views needed at a source frame (many episodes only have image_0)
-      max_episodes: 50       # evenly spread over the episodes on disk with min_views views
+      max_episodes: 1500      # evenly spread over the episodes on disk with min_views views (1933 locally)
       min_length: 15
-      frames_per_episode: 2
+      frames_per_episode: 3
     fractal:
       views: [observation.images.image]
       min_views: 1
-      max_episodes: 25
+      max_episodes: 200
       min_length: 15
       frames_per_episode: 2
   points:
@@ -55,3 +62,33 @@ depth_tier1:
     p_dot: 0.2               # filled-dot markers instead of BLINK rings (free-form prompts only)
     p_blink: 0.6             # BLINK prompt verbatim, ring markers
     p_blink_farther: 0.1     # same, asking for the farther point
+
+# Per-episode question generators (aijgen.generators); their frames are written once per camera listed in episodes.
+generators:
+  phase_qa:
+    enabled: true
+    # where inside a phase run the question frame is sampled, as fractions of the run length
+    frame_range: [0.1, 0.9]
+    phase_frame_range:
+      contact: [0.1, 0.9]
+    seed: 42
+    merge_phases: true
+    # ask only about these phases; with merge_phases: true only pre_grasp, contact, post_grasp exist
+    labeled_phases: [pre_grasp, contact, post_grasp]
+
+# Datasets the per-episode generators read (aijgen.generators.episodes)
+episodes:
+  min_frame_std: 8.0         # a camera whose frame is this flat is blank in that episode: no record for it
+  datasets:
+    bridge:
+      cameras: [observation.images.image_0, observation.images.image_1, observation.images.image_2]
+      gripper_dim: 6         # in observation.state
+      closed_high: false     # tools/fetch_data.py SOURCES
+      min_length: 10
+      max_episodes: 1500     # evenly spread over the episodes with a video for the first camera on disk
+    fractal:
+      cameras: [observation.images.image]
+      gripper_dim: 7
+      closed_high: true
+      min_length: 10
+      max_episodes: 1500
