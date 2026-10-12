@@ -12,8 +12,14 @@ import math
 
 LETTERS = "ABCD"
 
-MCQ_SUFFIX = ("Answer with the single letter corresponding to the correct option. "
-              "Do not explain. Your answer must be one of A, B, C, or D.")
+# MCQ_SUFFIX = ("Answer with the single letter corresponding to the correct option. "
+#               "Do not explain. Your answer must be one of A, B, C, or D.")
+def mcq_suffix(n: int) -> str:
+    """ERQA-style instruction for n options: n=4 -> "... one of A, B, C, or D." """
+    letters = LETTERS[:n]
+    choices = letters[0] if n == 1 else ", ".join(letters[:-1]) + (", or " if n > 2 else " or ") + letters[-1]
+    return ("Answer with the single letter corresponding to the correct option. "
+            f"Do not explain. Your answer must be one of {choices}.")
 
 
 @dataclass
@@ -63,7 +69,6 @@ class Generator(ABC):
 
     def __init__(self, cfg: dict):
         self.cfg = cfg 
-        self.frame_range = [0.25, 0.75]
         self.seed = int(cfg["seed"])                       
 
     def rng(self, ep: Episode) -> np.random.Generator:
@@ -79,6 +84,7 @@ class Generator(ABC):
 
     # helpers for subclasses
 
+
     @staticmethod
     def mcq(question: str, 
             correct: str, #correct ans
@@ -91,4 +97,4 @@ class Generator(ABC):
         options = [options[i] for i in rng.permutation(len(options))]
         letter = LETTERS[options.index(correct)] #correct letter
         lines = "\n".join(f"{LETTERS[i]}. {o}" for i, o in enumerate(options))#  "A. Moving away\nB. Approaching\nC. Closing the gripper\nD. Releasing"
-        return f"{question}\n{lines}\n{MCQ_SUFFIX}", letter
+        return f"{question}\n{lines}\n{mcq_suffix(len(options))}", letter

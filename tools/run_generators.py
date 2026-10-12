@@ -1,7 +1,7 @@
 """Run the question generators on downloaded Bridge episodes and save a small preview dataset.
 
-python tools/preview_generators.py --n 20
-Output: data/gen/preview/annotations.jsonl and data/gen/preview/images/
+python tools/run_generators.py --n 20
+Output: data/generators_outputs/.../
 """
 import argparse
 import json
@@ -18,13 +18,14 @@ from functools import lru_cache
 import logging
 from tqdm import tqdm
 
-from explore_episode import gripper_scale, load_meta_episodes, read_frames
+from explore_episode import gripper_scale, load_meta_episodes, read_frames, camera_present
 
 REPO = Path(__file__).resolve().parents[1]           # aij26-vlm/
 ROOT = REPO / "data" / "raw" / "bridge"              
 CONFIG = REPO / "submission" / "config.yaml"         # generator settings
-OUT = REPO / "data" / "generators_output" / "test_run"  # output: annotations.jsonl + images/
-CAM = "image_0"
+OUT = REPO / "data" / "generators_output" / "merged_phases"  # output: annotations.jsonl + images/
+MAIN_CAM = "image_0"                                 
+CAMS = ["image_0", "image_1", "image_2"]
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s",
                     datefmt="%H:%M:%S")
@@ -39,11 +40,11 @@ def data_path(ep: pd.Series) -> Path:
     c, f = int(ep["data/chunk_index"]), int(ep["data/file_index"])
     return ROOT / "data" / f"chunk-{c:03d}" / f"file-{f:03d}.parquet"
 
-def video_path(ep: pd.Series) -> Path:
-    """mp4 file with this episode's frames from camera CAM."""
-    key = f"videos/observation.images.{CAM}"
+def video_path(ep: pd.Series, cam: str) -> Path:                       # CHANGED: camera is a parameter
+    """mp4 file with this episode's frames from camera cam."""
+    key = f"videos/observation.images.{cam}"
     c, f = int(ep[f"{key}/chunk_index"]), int(ep[f"{key}/file_index"])
-    return ROOT / "videos" / f"observation.images.{CAM}" / f"chunk-{c:03d}" / f"file-{f:03d}.mp4"
+    return ROOT / "videos" / f"observation.images.{cam}" / f"chunk-{c:03d}" / f"file-{f:03d}.mp4"
 
 @lru_cache(maxsize=2)
 def read_table(path: Path) -> pd.DataFrame:
@@ -62,7 +63,8 @@ def main():
     scale = gripper_scale(ROOT)
 
     eps = load_meta_episodes(ROOT) #meta table
-    on_disk = [data_path(ep).exists() and video_path(ep).exists() for _, ep in eps.iterrows()]
+    on_disk = [data_path(ep).exists() and video_path(ep, MAIN_CAM).exists()   
+            for _, ep in eps.iterrows()]
     log.info("%d of %d episodes are downloaded", sum(on_disk), len(on_disk))
     eps = eps[on_disk].sort_values("episode_index").head(args.n)
     log.info("processing %d episodes -> %s", len(eps), OUT)
@@ -81,12 +83,12 @@ def main():
         close_state = ph.closedness(state[:, 6], closed_high=False, scale=scale)
 
         ep = Episode(dataset="bridge", 
-                     index=e, 
-                     task=list(row["tasks"])[0],
-                     length=len(state), 
-                     state=state, 
-                     closedness=close_state,
-                     labels=ph.label(close_state) if close_state is not None else None)
+                    index=e, 
+                    task=list(row["tasks"])[0],
+                    length=len(state), 
+                    state=state, 
+                    closedness=close_state,
+                    labels=ph.label(close_state) if close_state is not None else None)
 
         questions = []
         for g in generators:          # каждый включённый генератор
@@ -97,24 +99,32 @@ def main():
         if not questions:
             continue
 
-        frames = read_frames(ROOT, row, CAM, ep.length)
+        cams = [cam for cam in CAMS if camera_present(row, cam) and video_path(row, cam).exists()]
+        frames = {cam: read_frames(ROOT, row, cam, ep.length) for cam in cams}
+        stats[f"episodes with {len(cams)} camera(s)"] += 1
+
+        # frames = read_frames(ROOT, row, CAM, ep.length)
         for q in questions:
-            images = []
-            for frame in q.frames:
-                phase = ph.PHASES[ep.labels[frame]]
-                name = f"images/bridge_ep{e:06d}_fr{frame:03d}_{CAM}_{phase}.jpg"
-                if not (OUT / name).exists():
-                    Image.fromarray(frames[frame]).save(OUT / name, quality=90)
+            for cam in cams:                                            # NEW: same question, every view
+                if any(frames[cam][t] is None for t in q.frames):       # frame not decoded: skip this view
+                    continue
+                images = []
+                for frame in q.frames:
+                    phase = q.meta.get("phase", "nophase")
+                    name = f"images/bridge_ep{e:06d}_fr{frame:03d}_{cam}_{phase}.jpg"
+                    if not (OUT / name).exists():
+                        Image.fromarray(frames[cam][frame]).save(OUT / name, quality=90)
 
-                images.append(name)
+                    images.append(name)
 
-            records.append({
-                "messages": [
-                    {"role": "user", "content": "<image>\n" * len(images) + q.question},
-                    {"role": "assistant", "content": q.answer},
-                ],
-                "images": images,
-            })
+                records.append({
+                    "messages": [
+                        {"role": "user", "content": "<image>\n" * len(images) + q.question},
+                        {"role": "assistant", "content": q.answer},
+                    ],
+                    "images": images,
+                })
+                stats[f"records from {cam}"] += 1 
 
             stats[f"{q.kind} answer {q.answer}"] += 1 #cколько овтетов с этой буквой
             stats[f"{q.kind} phase {q.meta.get('phase')}"] += 1 #сколько вопросов по каждой фазе

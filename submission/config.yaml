@@ -4,7 +4,10 @@ generators:
   phase_qa:
     enabled: true
     # where inside a phase run the question frame is sampled, as fractions of the run length
-    frame_range: [0.25, 0.75]
+    frame_range: [0.1, 0.9]
+    phase_frame_range:
+      contact: [0.1, 0.9]
     seed: 42
-    # ask only about these phases (names from aijgen.phases.PHASES)
-    labeled_phases: [immobilization, contact]
+    merge_phases: true
+    # ask only about these phases; with merge_phases: true only pre_grasp, contact, post_grasp exist
+    labeled_phases: [pre_grasp, contact, post_grasp]
