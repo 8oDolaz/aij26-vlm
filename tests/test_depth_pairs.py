@@ -1,4 +1,5 @@
 """Tests for submission/src/aijgen/depth/{pairs,render,tier1}.py. Run: python -m unittest discover -s tests"""
+import itertools
 import sys
 import unittest
 from collections import Counter
@@ -154,6 +155,119 @@ class TestRender(unittest.TestCase):
                 self.assertEqual(answer, "No.")
         for _ in range(50):
             self.assertEqual(R.question("A", "dot", cfg, rng)[2], "free")
+
+
+class TestSets(unittest.TestCase):
+    SHAPE = (480, 640)
+
+    def frame_pairs(self):
+        # a near box low in the frame, a mid-depth row and a far row; two points share segment 7
+        pts = [pt(400, 320, 0.95, 1), pt(250, 80, 0.6, 2), pt(250, 560, 0.55, 3), pt(120, 200, 0.2, 4),
+               pt(120, 440, 0.15, 5), pt(330, 600, 0.5, 6), pt(60, 100, 0.05, 7), pt(60, 300, 0.1, 7)]
+        return P.candidate_pairs(pts, self.SHAPE, PAIRS)[0]
+
+    def test_target_beats_every_member(self):
+        pairs = self.frame_pairs()
+        beaten = {(P._key(p["near"]), P._key(p["far"])) for p in pairs}
+        for relation in ("closest", "farthest"):
+            for k in (3, 4):
+                sets = P.candidate_sets(pairs, k, relation, self.SHAPE, PAIRS, np.random.default_rng(0))
+                self.assertTrue(sets, (relation, k))
+                for s in sets:
+                    t, others = s["target"], s["others"]
+                    self.assertEqual(len(others), k - 1)
+                    for o in others:
+                        edge = (P._key(t), P._key(o)) if relation == "closest" else (P._key(o), P._key(t))
+                        self.assertIn(edge, beaten)
+                    members = [t] + others
+                    self.assertEqual(len({q["seg"] for q in members}), k)  # distinct segments
+                    for a, b in itertools.combinations(members, 2):
+                        self.assertGreaterEqual(np.hypot(a["x"] - b["x"], a["y"] - b["y"]),
+                                                PAIRS["min_dist_frac"] * self.SHAPE[1])
+        closest = P.candidate_sets(pairs, 4, "closest", self.SHAPE, PAIRS, np.random.default_rng(0))
+        targets = {P._key(s["target"]): s for s in closest}
+        self.assertIn((400, 320), targets)                                 # the box beats everything
+        self.assertFalse({k for k in targets if k[0] <= 120})              # far points never are the closest
+        self.assertTrue(targets[(400, 320)]["shortcut"])                   # the box is the lowest point
+
+    def make_sets(self, k, n_hit, n_miss):
+        out = []
+        for i in range(n_hit + n_miss):
+            t = pt(400 if i < n_hit else 100, 10 + i, 0.9, 10 * i)
+            others = [pt(200 + j, 300 + j, 0.3, 10 * i + j + 1) for j in range(k - 1)]
+            out.append({"target": t, "others": others, "relation": "closest", "k": k, "g": 0.4, "groups": [],
+                        "background": False, "shortcut": i < n_hit})
+        return out
+
+    def test_balance_and_letters(self):
+        rng = np.random.default_rng(0)
+        sets = self.make_sets(4, 200, 120) + self.make_sets(3, 10, 100)
+        out = P.balance_sets(sets, 0.15, rng)
+        for k in (3, 4):
+            bucket = [s for s in out if s["k"] == k]
+            self.assertAlmostEqual(np.mean([s["shortcut"] for s in bucket]), 1 / k, delta=0.02)
+        self.assertEqual(sum(s["k"] == 3 for s in out), 30)  # scarce hits: 10 hits + 20 misses
+        P.assign_set_letters(out, rng)
+        for k in (3, 4):
+            bucket = [s for s in out if s["k"] == k]
+            for key in ("slot", "opt_slot"):
+                counts = Counter(s[key] for s in bucket)
+                self.assertEqual(set(counts), set(range(k)))
+                self.assertLessEqual(max(counts.values()) - min(counts.values()), 1)
+            for s in bucket:
+                self.assertIs(s["points"][s["slot"]], s["target"])
+                self.assertEqual(len(s["points"]), k)
+        audit = P.audit_sets(out, lambda s: self.SHAPE)
+        self.assertAlmostEqual(audit["lowest_is_closest_highest_is_farthest"], audit["chance"], delta=0.03)
+
+    def test_subsample_keeps_groups(self):
+        pairs = TestBalance().make("consistent", 60, 0) + TestBalance().make("same_row", 30, 0)
+        out = P.subsample(pairs, 30, np.random.default_rng(0))
+        self.assertEqual(Counter(p["group"] for p in out), {"consistent": 20, "same_row": 10})
+        self.assertIs(P.subsample(pairs, 500, np.random.default_rng(0)), pairs)
+
+
+class TestSetRender(unittest.TestCase):
+    def test_note_matches_lmms_eval(self):
+        # lmms-eval blink: pre_prompt.format(", ".join(chr(65 + i) for i in range(len(choices))))
+        self.assertEqual(R.note("ABCD"), "Note: You only need to respond with A, B, C, D without providing any "
+                                         "additional information.\n")
+        self.assertEqual(R.NOTE, "Note: You only need to respond with A, B without providing any additional "
+                                 "information.\n")
+
+    def test_set_questions(self):
+        rng = np.random.default_rng(0)
+        kinds, orders = Counter(), set()
+        for i in range(300):
+            k, slot, opt_slot = (4, i % 4, (i // 4) % 4) if i % 2 else (3, i % 3, (i // 3) % 3)
+            prompt, answer, kind, labels = R.set_question(k, slot, opt_slot, "closest", "ring", 0.5, rng)
+            kinds[kind.split("_")[1]] += 1
+            self.assertEqual(len(labels), k)
+            if kind == "set_letter":
+                self.assertEqual(answer, labels[slot])
+                self.assertTrue(prompt.startswith(R.note(labels)))
+                self.assertIn(f"({answer}) {answer} is closest", prompt)
+            else:
+                self.assertEqual(labels, [str(n + 1) for n in range(k)])
+                self.assertEqual(answer, chr(65 + opt_slot))
+                lines = [l for l in prompt.split("\n") if "point " in l and l[0] in "(ABCD"]
+                self.assertEqual(len(lines), k)
+                target_line = next(l for l in lines if l.lstrip("(").startswith(answer))
+                self.assertTrue(target_line.endswith(f"point {labels[slot]}"), (target_line, prompt))
+                orders.add(tuple(l.split()[-1] for l in lines))
+        self.assertGreater(min(kinds.values()), 100)  # both variants used
+        self.assertGreater(len(orders), 10)           # option order varies
+
+    def test_draw_four_markers(self):
+        img = np.full((384, 512, 3), 128, np.uint8)
+        pts = {"1": (5, 3), "2": (60, 40), "3": (500, 380), "4": (256, 200)}
+        out = R.draw(img, pts, "ring")
+        self.assertEqual(out.shape, img.shape)
+        r = max(4, round(0.011 * 512))
+        self.assertTrue((out[200, 256 + r] == R.RED).all())
+        # a label box over another point's marker is rejected, a clear one is accepted
+        self.assertFalse(R._box_ok((50, 30, 70, 50), [(60, 40)], r, 512, 384))
+        self.assertTrue(R._box_ok((150, 130, 170, 150), [(60, 40), (500, 380)], r, 512, 384))
 
 
 class TestViews(unittest.TestCase):
