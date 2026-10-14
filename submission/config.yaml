@@ -85,6 +85,10 @@ generators:
     merge_phases: true
     # ask only about these phases; with merge_phases: true only pre_grasp, contact, post_grasp exist
     labeled_phases: [pre_grasp, contact, post_grasp]
+    min_phase_seconds: 0.6
+    # releasing: the gripper is open and the arm has moved at least this far (meters)
+    # from where it let go, so the release is visible on the image
+    release_min_distance: 0.04
 
 # Datasets the per-episode generators read (aijgen.generators.episodes)
 episodes:
