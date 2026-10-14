@@ -31,6 +31,8 @@ Run in the dev container (huggingface_hub, pyarrow, numpy; HF token comes from t
   docker compose run --rm dev python tools/fetch_data.py --dry-run
   docker compose run --rm dev python tools/fetch_data.py
   docker compose run --rm dev python tools/fetch_data.py --full fractal --budget-gb bridge=10
+  docker compose run --rm dev python tools/fetch_data.py --datasets bridge --min-views bridge=3 --budget-gb bridge=45
+                                                         # Bridge episodes with cameras 0, 1 and 2 only
   docker compose run --rm dev python tools/fetch_data.py --no-video            # proprioception only, all datasets
   docker compose run --rm dev python tools/fetch_data.py --no-video bridge     # video for fractal, language_table only
   docker compose run --rm dev python tools/fetch_data.py --phases pre_grasp contact   # grasps that end holding count too
@@ -233,8 +235,9 @@ def match_owner(path: Path, ref: Path) -> None:
 
 
 def run(name: str, src: Source, out: Path, video: str, budget_gb: float, required: tuple[str, ...],
-        min_frames: int, dry_run: bool, workers: int) -> None:
-    """video: 'subset' (within budget_gb), 'full' or 'none'. required: grasp phases an episode must go through."""
+        min_frames: int, dry_run: bool, workers: int, min_views: int = 1) -> None:
+    """video: 'subset' (within budget_gb), 'full' or 'none'. required: grasp phases an episode must go through.
+    min_views: real cameras an episode needs to count as usable."""
     root = out / name
     print(f"== {name}: {src.repo}@{src.revision[:8]} -> {root}", flush=True)
     download(src, root, ["README.md", "meta/*", "data/*"], workers)
@@ -246,8 +249,8 @@ def run(name: str, src: Source, out: Path, video: str, budget_gb: float, require
 
     ep = load_episodes(root, keys, info["video_path"])
     act_ids, active = activity(root, src, {phases.PHASES.index(p) for p in required}, min_frames)
-    usable = usable_mask(ep, act_ids, active, src)
     real = np.stack([ep[f"real/{k}"] for k in keys], 1)
+    usable = usable_mask(ep, act_ids, active, src) & (real.sum(1) >= min_views)
     multiview = real.sum(1) >= 2
     primary = ep[f"path/{keys[0]}"]
 
@@ -279,7 +282,8 @@ def run(name: str, src: Source, out: Path, video: str, budget_gb: float, require
         "mode": video, "budget_gb": budget_gb if video == "subset" else None,
         "mv_share": src.mv_share if video == "subset" else None,
         "video_keys": keys, "files": files, "bytes": total,
-        "rules": {"min_len": src.min_len, "gripper_dim": src.gripper_dim, "closed_high": src.closed_high,
+        "rules": {"min_len": src.min_len, "min_views": min_views, "gripper_dim": src.gripper_dim,
+                  "closed_high": src.closed_high,
                   "phases": list(required) if src.gripper_dim is not None else None, "min_phase_frames": min_frames,
                   "grasp_threshold": phases.GRASP_THRESHOLD, "contact_threshold": phases.CONTACT_THRESHOLD,
                   "min_gripper_range": phases.MIN_RANGE, "motion_dims": list(src.motion_dims),
@@ -306,6 +310,9 @@ def main() -> None:
     p.add_argument("--budget-gb", nargs="+", default=[], metavar="NAME=GB",
                    help="video budget per subset dataset (defaults: " +
                         ", ".join(f"{k}={v.budget_gb:g}" for k, v in SOURCES.items()) + ")")
+    p.add_argument("--min-views", nargs="+", default=[], metavar="NAME=N",
+                   help="only episodes with at least N real cameras count as usable (default 1); "
+                        "bridge=3 keeps the episodes with image_0, image_1 and image_2")
     p.add_argument("--phases", nargs="+", choices=phases.PHASES + ("none",), metavar="PHASE",
                    default=["pre_grasp", "contact", "post_grasp"],
                    help=f"grasp phases a gripper episode must go through, from {', '.join(phases.PHASES)}; "
@@ -322,6 +329,12 @@ def main() -> None:
         if k not in SOURCES or not v:
             p.error(f"--budget-gb: expected NAME=GB with NAME in {list(SOURCES)}, got {item!r}")
         budgets[k] = float(v)
+    min_views = dict.fromkeys(SOURCES, 1)
+    for item in a.min_views:
+        k, _, v = item.partition("=")
+        if k not in SOURCES or not v.isdigit():
+            p.error(f"--min-views: expected NAME=N with NAME in {list(SOURCES)}, got {item!r}")
+        min_views[k] = int(v)
     if "none" in a.phases and len(a.phases) > 1:
         p.error("--phases none cannot be combined with phase names")
     required = () if a.phases == ["none"] else tuple(a.phases)
@@ -331,7 +344,8 @@ def main() -> None:
     names = a.datasets + a.full + (a.no_video or [])  # naming a dataset in --full / --no-video selects it
     for name in dict.fromkeys(names):
         video = "full" if name in a.full else "none" if name in no_video else "subset"
-        run(name, SOURCES[name], a.out, video, budgets[name], required, a.min_phase_frames, a.dry_run, a.workers)
+        run(name, SOURCES[name], a.out, video, budgets[name], required, a.min_phase_frames, a.dry_run, a.workers,
+            min_views[name])
 
 
 if __name__ == "__main__":
