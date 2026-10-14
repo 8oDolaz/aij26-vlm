@@ -29,18 +29,19 @@ class Question:
     frames: list[int]                         # frame indices in the episode, one image each, in order
     kind: str                                 # generator name, for statistics
     meta: dict = field(default_factory=dict)  # debug info, not written to the JSONL
-
+    
 
 @dataclass
 class Episode:
     dataset: str                              # "bridge", "fractal", ...
     index: int                                # episode_index in the dataset
     task: str                                 # instruction
-    length: int                               # number of frames
+    length: int  
+    fps: float                             # number of frames
     state: np.ndarray                         # (length, 7)
     closedness: np.ndarray | None = None      # (length,) 0 open .. 1 closed; None = no gripper signal
     labels: np.ndarray | None = None          # (length,) phase index per frame (aijgen.phases)
-
+    
 
 def stable_id(s: str) -> int:
     """Deterministic integer for a string (seeds for datasets)"""

@@ -28,6 +28,10 @@ def load(root: Path) -> list[dict]:
     depth_meta = {}
     if meta_path.exists():
         depth_meta = {m["id"]: m for m in map(json.loads, meta_path.read_text().splitlines())}
+    phase_meta_path = root / "annotations.meta.jsonl"
+    phase_meta = {}
+    if phase_meta_path.exists():
+        phase_meta = {m["id"]: m for m in map(json.loads, phase_meta_path.read_text().splitlines())}
     records = []
     for n, line in enumerate((root / "annotations.jsonl").read_text().splitlines()):
         r = json.loads(line)
@@ -35,6 +39,8 @@ def load(root: Path) -> list[dict]:
         r["n"], r["kind"] = n, "depth" if image.startswith("depth_tier1/") else "phase"
         if r["kind"] == "depth":
             r["meta"] = depth_meta.get(int(DEPTH_IMAGE.search(image).group(1)))
+        if r["kind"] == "phase":
+            r["pmeta"] = phase_meta.get(n)
         records.append(r)
     return records
 
@@ -50,6 +56,11 @@ def describe(r: dict, total: int) -> str:
         lines.append(f"{DIM}closer: {m['near']}  gap g={m['g']:.2f}  group={m['group']}  "
                      f"A={m['A']['kind']} d={m['A']['d']:.2f}  B={m['B']['kind']} d={m['B']['d']:.2f}  "
                      f"background={m['background']}  prompt={m['kind']}{RESET}")
+    elif (pm := r.get("pmeta")):
+        lines.append(f"{DIM}{pm['dataset']} ep{pm['episode']} f{pm['frame']}/{pm.get('length', '?')} {pm['camera']}  task: {pm['task']!r}{RESET}")
+        lines.append(f"{DIM}gripper state={pm['gripper_state']}  action={pm['gripper_action']}  "
+                     f"closedness={pm['closedness']}  around={pm['closedness_around']}{RESET}")
+        lines.append(f"{DIM}phase (5) = {pm['phase5']}   question phase = {pm['question_phase']}{RESET}")
     elif (p := PHASE_IMAGE.search(r["images"][0])):
         lines.append(f"{DIM}ep{int(p.group(1))} f{int(p.group(2))} {p.group(3)}{RESET}")
     lines += ["", question.replace("<image>\n", ""), ""]
