@@ -1,10 +1,12 @@
 """Step through a generated dataset: the image in a window, the question and the correct answer in the terminal.
 
-Depth questions also show DA3's depth map (turbo: red = close, blue = far) with the same A/B points.
+Depth questions print their details (closer point, gap, point kinds) from depth_tier1/annotations.meta.jsonl.
+With --depth they also show DA3's depth map (turbo: red = close, blue = far) with the same A/B points;
+that needs depth_tier1/cache/, which can be left out when copying the dataset.
 Keys in the window: n / space / right = next, p / left = previous, r = random, q / Esc = quit.
 
 .venv/bin/python tools/inspect_annotations.py mount/rel_depth_phase
-.venv/bin/python tools/inspect_annotations.py mount/rel_depth_phase --kind depth --shuffle
+.venv/bin/python tools/inspect_annotations.py mount/rel_depth_phase --kind depth --shuffle --depth
 python3 tools/inspect_annotations.py mount/rel_depth_phase --print --kind phase | less -R   # terminal only, no window
 """
 import argparse
@@ -56,13 +58,13 @@ def describe(r: dict, total: int) -> str:
     return "\n".join(lines)
 
 
-def view(root: Path, r: dict):
-    """The question image, plus the depth map with the same points for depth questions; scaled up 2x."""
+def view(root: Path, r: dict, depth_map: bool):
+    """The question image, plus (depth_map) the depth map with the same points for depth questions; scaled up 2x."""
     import cv2
     import numpy as np
     img = cv2.imread(str(root / r["images"][0]))
     m = r.get("meta")
-    cache = root / "depth_tier1" / "cache" / f"{m['frame']}.npz" if m else None
+    cache = root / "depth_tier1" / "cache" / f"{m['frame']}.npz" if m and depth_map else None
     if cache and cache.exists():
         disp = np.load(cache)["disp"].astype(np.float32)
         lo, hi = np.percentile(disp, [2, 98])
@@ -83,9 +85,16 @@ def main():
     ap.add_argument("--shuffle", action="store_true", help="random order instead of file order")
     ap.add_argument("--start", type=int, default=1, help="record number to start at (as printed)")
     ap.add_argument("--print", action="store_true", help="print all selected records, no window")
+    ap.add_argument("--depth", action="store_true",
+                    help="show the depth map next to depth questions (needs depth_tier1/cache/)")
     args = ap.parse_args()
 
     records = load(args.root)
+    if any(r["kind"] == "depth" for r in records):
+        if not (args.root / "depth_tier1" / "annotations.meta.jsonl").exists():
+            print(f"{DIM}no depth_tier1/annotations.meta.jsonl: depth questions show no details{RESET}")
+        if args.depth and not (args.root / "depth_tier1" / "cache").is_dir():
+            print(f"{DIM}--depth: no depth_tier1/cache/, showing images only{RESET}")
     total = len(records)
     records = [r for r in records if args.kind in (None, r["kind"])]
     if args.shuffle:
@@ -104,7 +113,7 @@ def main():
         r = records[i]
         print("\033[2J\033[H" + describe(r, total))
         print(f"\n{DIM}n/space: next  p: previous  r: random  q: quit{RESET}")
-        cv2.imshow("annotation", view(args.root, r))
+        cv2.imshow("annotation", view(args.root, r, args.depth))
         key = cv2.waitKeyEx(0)
         if key in (ord("q"), 27) or cv2.getWindowProperty("annotation", cv2.WND_PROP_VISIBLE) < 1:
             break
