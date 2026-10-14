@@ -4,8 +4,8 @@ seed: 0
 
 # Max records kept per source (null = all), sampled with the seed; then everything is shuffled together.
 mix:
-  # depth_tier1: 2000
-  # phase_qa: 3000
+  depth_tier1: 2000
+  phase_qa: 3000
 
 # Relative-depth Tier 1: BLINK-style point pairs (docs/relative_depth_plan.md, section 5).
 # Gap thresholds are in per-frame normalised disparity (p2..p98 -> 0..1), calibrated on NYU-v2 (section 2.2) with
