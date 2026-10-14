@@ -14,13 +14,13 @@ run_name: d1_depth_phase
 
 vlm:
   protocol: full                     # -> configs/vlm_sft.yaml, i.e. configs/vlm_sft/d1_depth_phase.yaml mounted over it
-  data_path: /data/gen/d1_depth_phase/annotations.jsonl
+  data_path: /data/gen/rel_depth/annotations.jsonl
   eval_data_path: null
-  media_dir: /data/gen/d1_depth_phase   # image paths in the JSONL are relative to it
+  media_dir: /data/gen/rel_depth   # image paths in the JSONL are relative to it
 
 vla:
   suite: libero
-  dataset_dir: /data/vla             # HuggingFaceVLA/libero @ v3.0; kit default vla_libero.yaml
+  dataset_dir: /repo/vendor/participant/examples/smoke/libero_mini    # HuggingFaceVLA/libero @ v3.0; kit default vla_libero.yaml
 
 runtime:
   gpu_indices: [0]

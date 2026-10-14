@@ -1,3 +1,4 @@
+
 ### model
 # d1_depth_phase SFT: the kit's full template (vendor/participant/configs/vlm_sft.yaml) with changes marked CHANGED.
 # Mounted over /workspace/configs/vlm_sft.yaml, see configs/d1_depth_phase.yaml.
