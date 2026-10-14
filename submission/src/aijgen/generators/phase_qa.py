@@ -36,6 +36,8 @@ class PhaseGenerator(Generator):
     def __init__(self, cfg: dict):
         super().__init__(cfg)
         self.frame_range = tuple(cfg["frame_range"])
+        self.min_phase_seconds = float(cfg["min_phase_seconds"])
+        self.release_min_distance = float(cfg["release_min_distance"])
 
         if cfg["merge_phases"]:
             self.names = ("pre_grasp", "contact", "post_grasp")
@@ -67,8 +69,21 @@ class PhaseGenerator(Generator):
             if phase not in self.labeled_phases:
                 continue
 
-            frame_range = self.phase_frame_range.get(phase, self.frame_range)
-            frame = pick_frame(start, end, rng, frame_range)
+            duration = (end - start + 1) / ep.fps          # seconds
+            if duration < self.min_phase_seconds:
+                continue
+            
+            extra = {}
+            if phase == "post_grasp":
+                # releasing is visible only once the gripper is open and the arm has moved off the object
+                picked = self.pick_release_frame(ep, start, end, rng)
+                if picked is None:
+                    continue
+                frame, moved = picked
+                extra = {"moved_m": round(moved, 3)}
+            else:
+                frame_range = self.phase_frame_range.get(phase, self.frame_range)
+                frame = pick_frame(start, end, rng, frame_range)
 
             correct = self.text[phase]
             others = [self.text[name] for name in self.names if name != phase]
@@ -76,5 +91,21 @@ class PhaseGenerator(Generator):
             distractors = [others[i] for i in rng.choice(len(others), size=k, replace=False)]
 
             text, letter = self.mcq(question, correct, distractors, rng)
-            out.append(Question(text, letter, [frame], self.name, {"phase": phase}))
+            out.append(Question(text, letter, [frame], self.name, {"phase": phase, **extra}))
         return out
+
+    def pick_release_frame(self, ep, start, end, rng):
+        """A frame of the releasing run where the gripper is open and the arm has moved away from
+        where it let go, so the release is visible on the image. (frame, distance in m) or None."""
+        held = np.flatnonzero(ep.labels[:start] == ph.CONTACT)
+        if len(held) == 0:
+            return None
+        release_pos = ep.state[held[-1], 0:3]           # arm xyz at the last holding frame
+        candidates = []
+        for t in range(start, end + 1):
+            moved = float(np.linalg.norm(ep.state[t, 0:3] - release_pos))
+            if ep.closedness[t] <= ph.GRASP_THRESHOLD and moved >= self.release_min_distance:
+                candidates.append((t, moved))
+        if not candidates:
+            return None
+        return candidates[int(rng.integers(len(candidates)))]
