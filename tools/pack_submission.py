@@ -40,6 +40,9 @@ FORBIDDEN_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".gif", ".webp", ".tif", 
                       ".mp4", ".avi", ".mov", ".mkv", ".webm", ".parquet", ".arrow", ".pyc"}
 FORBIDDEN_DIRS = {"__pycache__", ".git", ".ipynb_checkpoints", ".pytest_cache", ".cache"}
 REMOTE_MARKERS = ("hf://", "http://", "https://", "huggingface.co")
+# LLaMA-Factory writes these next to the final weights in vlm/checkpoints/; not part of the model.
+TRAINER_FILES = {"training_loss.png", "trainer_log.jsonl", "trainer_state.json", "training_args.bin",
+                 "all_results.json", "train_results.json", "README.md"}
 
 
 def _is_trainer_dir(name: str) -> bool:
@@ -106,6 +109,9 @@ def copy_vlm(src: Path, dst: Path, bf16: bool) -> None:
         if f.is_dir():
             if not _is_trainer_dir(f.name):
                 print(f"  note: skipping subdir smolvlm2/{f.name}")
+            continue
+        if f.name in TRAINER_FILES:
+            print(f"  note: skipping trainer file smolvlm2/{f.name}")
             continue
         if bf16 and f.suffix == ".safetensors":
             convert_safetensors_bf16(f, dst / f.name)

@@ -1,0 +1,34 @@
+# d1_depth_phase: SFT on depth-tier1 (BLINK-style closer point) + gripper-phase questions, then the default VLA stage.
+# Paths are inside the dev container (compose.yaml: repo at /repo, ./data at /data).
+#
+# 1. Generate (organizers' invocation; run from /repo so depth_tier1.da3_src resolves):
+#   docker compose run --rm dev python submission/generate_dataset.py \
+#     --input /data/raw --output /data/gen/d1_depth_phase/annotations.jsonl --config submission/config.yaml
+# 2. Train, inside the long-lived dev container (docker compose exec dev bash). run_pipeline.py always reads
+#    /workspace/configs/vlm_sft.yaml, so link our template over it (redo after the container is recreated):
+#   cp -n /workspace/configs/vlm_sft.yaml /workspace/configs/vlm_sft.kit.yaml
+#   ln -sf /repo/configs/vlm_sft/d1_depth_phase.yaml /workspace/configs/vlm_sft.yaml
+#   cd /workspace && ./scripts/run_pipeline.sh /repo/configs/d1_depth_phase.yaml --skip-vla --dry-run
+#   FORCE_TORCHRUN=1 PYTORCH_ALLOC_CONF=expandable_segments:True nohup setsid \
+#     ./scripts/run_pipeline.sh /repo/configs/d1_depth_phase.yaml --skip-vla \
+#     > /repo/runs/d1_depth_phase/pipeline_$(date +%m%d_%H%M).log 2>&1 &
+#   FORCE_TORCHRUN=1: the full template uses DeepSpeed, which LLaMA-Factory only runs under torchrun, and the kit
+#   starts torchrun by itself only for 2+ GPUs. Progress: /repo/runs/d1_depth_phase/logs/vlm.log
+
+run_name: d1_depth_phase
+
+vlm:
+  protocol: full                     # -> configs/vlm_sft.yaml, i.e. configs/vlm_sft/d1_depth_phase.yaml linked over it
+  data_path: /data/gen/rel_depth/annotations.jsonl
+  eval_data_path: null
+  media_dir: /data/gen/rel_depth   # image paths in the JSONL are relative to it
+
+vla:
+  suite: libero
+  dataset_dir: /repo/vendor/participant/examples/smoke/libero_mini    # HuggingFaceVLA/libero @ v3.0; kit default vla_libero.yaml
+
+runtime:
+  gpu_indices: [0]
+  output_root: /repo/runs
+  cache_dir: /repo/runs/cache/core
+  lerobot_home: /repo/runs/cache/lerobot
