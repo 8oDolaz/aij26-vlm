@@ -23,7 +23,7 @@ from explore_episode import gripper_scale, load_meta_episodes, read_frames, came
 REPO = Path(__file__).resolve().parents[1]           # aij26-vlm/
 ROOT = REPO / "data" / "raw" / "bridge"              
 CONFIG = REPO / "submission" / "config.yaml"         # generator settings
-OUT = REPO / "data" / "generators_output" / "test"  # output: annotations.jsonl + images/
+OUT = REPO / "data" / "generators_output" / "test_speed"  # output: annotations.jsonl + images/
 MAIN_CAM = "image_0"                                 
 CAMS = ["image_0", "image_1", "image_2"]
 

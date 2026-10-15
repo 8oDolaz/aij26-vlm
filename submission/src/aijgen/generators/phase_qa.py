@@ -2,8 +2,7 @@
 import numpy as np
 
 from aijgen import phases as ph
-from aijgen.generators.base import Generator, Question, pick_frame
-
+from aijgen.generators.base import Generator, Question, arm_speed, pick_frame_if
 # answer option text for each of the 5 phases of aijgen.phases
 PHASE_TEXT = {
     "pre_grasp":      "Approaching the object with the gripper open",
@@ -38,6 +37,7 @@ class PhaseGenerator(Generator):
         self.frame_range = tuple(cfg["frame_range"])
         self.min_phase_seconds = float(cfg["min_phase_seconds"])
         self.release_min_distance = float(cfg["release_min_distance"])
+        self.blur_max_speed = float(cfg["blur_max_speed"])
 
         if cfg["merge_phases"]:
             self.names = ("pre_grasp", "contact", "post_grasp")
@@ -83,7 +83,10 @@ class PhaseGenerator(Generator):
                 extra = {"moved_m": round(moved, 3)}
             else:
                 frame_range = self.phase_frame_range.get(phase, self.frame_range)
-                frame = pick_frame(start, end, rng, frame_range)
+                frame = pick_frame_if(start, end, rng, frame_range,
+                                      lambda t: arm_speed(ep, t) < self.blur_max_speed)
+                if frame is None:
+                    continue
 
             correct = self.text[phase]
             others = [self.text[name] for name in self.names if name != phase]
@@ -100,11 +103,12 @@ class PhaseGenerator(Generator):
         held = np.flatnonzero(ep.labels[:start] == ph.CONTACT)
         if len(held) == 0:
             return None
-        release_pos = ep.state[held[-1], 0:3]           # arm xyz at the last holding frame
+        release_pos = ep.state[held[-1], 0:3]           # arm xyяz at the last holding frame
         candidates = []
         for t in range(start, end + 1):
             moved = float(np.linalg.norm(ep.state[t, 0:3] - release_pos))
-            if ep.closedness[t] <= ph.GRASP_THRESHOLD and moved >= self.release_min_distance:
+            if (ep.closedness[t] <= ph.GRASP_THRESHOLD and moved >= self.release_min_distance
+                    and arm_speed(ep, t) < self.blur_max_speed):
                 candidates.append((t, moved))
         if not candidates:
             return None

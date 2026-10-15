@@ -15,3 +15,4 @@ generators:
     # releasing: the gripper is open and the arm has moved at least this far (meters)
     # from where it let go, so the release is visible on the image
     release_min_distance: 0.04
+    blur_max_speed: 0.121 #выше значения - блюр 

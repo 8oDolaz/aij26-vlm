@@ -41,7 +41,15 @@ class Episode:
     state: np.ndarray                         # (length, 7)
     closedness: np.ndarray | None = None      # (length,) 0 open .. 1 closed; None = no gripper signal
     labels: np.ndarray | None = None          # (length,) phase index per frame (aijgen.phases)
-    
+
+def arm_speed(ep: Episode, t: int) -> float:
+    """Gripper (end effector) speed at frame t in m/s, from the previous and the next frame."""
+    a, b = max(t - 1, 0), min(t + 1, ep.length - 1)
+    if b == a:
+        return 0.0
+    return float(np.linalg.norm(ep.state[b, 0:3] - ep.state[a, 0:3])) / ((b - a) / ep.fps)
+
+
 
 def stable_id(s: str) -> int:
     """Deterministic integer for a string (seeds for datasets)"""
@@ -61,6 +69,19 @@ def pick_frame(start: int,
     if low_bound > hight_bound:                                 
         return (start + end) // 2
     return int(rng.integers(low_bound, hight_bound + 1))
+
+def pick_frame_if(start: int, end: int, rng: np.random.Generator,
+                  frame_range: tuple[float, float], keep) -> int | None:
+    """Like pick_frame, but only among window frames t with keep(t) true; None if there is none."""
+    span = end - start
+    lo = start + math.ceil(frame_range[0] * span)
+    hi = start + math.floor(frame_range[1] * span)
+    if lo > hi:                                  # run too short for the range: only its middle
+        lo = hi = (start + end) // 2
+    candidates = [t for t in range(lo, hi + 1) if keep(t)]
+    if not candidates:
+        return None
+    return candidates[int(rng.integers(len(candidates)))]
 
 
 class Generator(ABC):

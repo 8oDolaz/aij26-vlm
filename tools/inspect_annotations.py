@@ -16,6 +16,7 @@ from pathlib import Path
 BOLD, GREEN, DIM, RESET = "\033[1m", "\033[92m", "\033[2m", "\033[0m"
 OPTION = re.compile(r"^\s*\(?([A-D])[.)]\s*(.+)$")
 PHASE_IMAGE = re.compile(r"ep(\d+)_f(\d+)_(\w+)\.jpg$")
+EPISODE_IN_NAME = re.compile(r"_ep(\d+)_")
 DEPTH_IMAGE = re.compile(r"_(\d{6})\.jpg$")
 
 
@@ -41,6 +42,13 @@ def load(root: Path) -> list[dict]:
             r["pmeta"] = phase_meta.get(n)            
         records.append(r)
     return records
+
+def episode_of(r: dict) -> int | None:
+    """Episode number of a phase record: from annotations.meta.jsonl, else from the image name."""
+    if r.get("pmeta"):
+        return r["pmeta"]["episode"]
+    m = EPISODE_IN_NAME.search(r["images"][0])
+    return int(m.group(1)) if m else None
 
 
 def describe(r: dict, total: int) -> str:
@@ -94,11 +102,20 @@ def main():
     ap.add_argument("--shuffle", action="store_true", help="random order instead of file order")
     ap.add_argument("--start", type=int, default=1, help="record number to start at (as printed)")
     ap.add_argument("--print", action="store_true", help="print all selected records, no window")
+    ap.add_argument("--episode", type=int, nargs="+", help="only these episodes, e.g. --episode 47 13860")
     args = ap.parse_args()
 
     records = load(args.root)
     total = len(records)
     records = [r for r in records if args.kind in (None, r["kind"])]
+
+    if args.episode:
+        wanted = set(args.episode)
+        records = [r for r in records if episode_of(r) in wanted]
+        if not records:
+            print(f"no records for episodes {sorted(wanted)}")
+            return
+
     if args.shuffle:
         random.shuffle(records)
     if args.print:
