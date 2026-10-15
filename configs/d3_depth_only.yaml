@@ -1,0 +1,23 @@
+# d3: the depth records of d2 only (same images and generator run), to measure depth alone against d1 and d2.
+# annotations.depth_only.jsonl = the lines of /data/gen/d2_depth_phase/annotations.jsonl whose image is under depth_tier1/.
+# Train (VLM only), inside the dev container (docker compose exec dev bash), with the d2 SFT template linked:
+#   ln -sf /repo/configs/vlm_sft/d2_depth_phase.yaml /workspace/configs/vlm_sft.yaml
+#   cd /workspace && FORCE_TORCHRUN=1 PYTORCH_ALLOC_CONF=expandable_segments:True \
+#     ./scripts/run_pipeline.sh /repo/configs/d3_depth_only.yaml --skip-vla > /repo/runs/d2_logs/d3_depth_only_train.log 2>&1
+run_name: d3_depth_only
+
+vlm:
+  protocol: full                     # -> configs/vlm_sft.yaml, i.e. configs/vlm_sft/d2_depth_phase.yaml linked over it
+  data_path: /data/gen/d2_depth_phase/annotations.depth_only.jsonl
+  eval_data_path: null
+  media_dir: /data/gen/d2_depth_phase   # image paths in the JSONL are relative to it
+
+vla:
+  suite: libero
+  dataset_dir: /repo/vendor/participant/examples/smoke/libero_mini    # HuggingFaceVLA/libero @ v3.0; kit default vla_libero.yaml
+
+runtime:
+  gpu_indices: [0]
+  output_root: /repo/runs
+  cache_dir: /repo/runs/cache/core
+  lerobot_home: /repo/runs/cache/lerobot
