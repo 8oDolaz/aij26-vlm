@@ -22,7 +22,7 @@ vla:
   dataset_dir: /data/vla             # HuggingFaceVLA/libero @ v3.0, all 1693 episodes
 
 runtime:
-  gpu_indices: [0, 1]                # 2 GPUs -> accelerate DDP in bf16, effective batch 8; leave headroom for the colleague's 10 GB
+  gpu_indices: [0]                # 2 GPUs -> accelerate DDP in bf16, effective batch 8; leave headroom for the colleague's 10 GB
   output_root: /repo/runs
   cache_dir: /repo/runs/cache/core
   lerobot_home: /repo/runs/cache/lerobot
