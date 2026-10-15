@@ -1,4 +1,5 @@
-"""Tier 1 point pairs: sampling by segment, gap and edge filters, temporal stability, balancing, shortcut audit.
+"""Tier 1 point pairs and point sets: sampling by segment, gap and edge filters, temporal stability, balancing,
+shortcut audit. A set is k points with one confidently closest (or farthest), built from the same pairs.
 
 Disparities are normalised per frame, dn = (d - p2) / (p98 - p2), so larger means closer and the gap between two
 points is the confidence `g` calibrated on NYU-v2 (docs/relative_depth_plan.md, section 2.2): with both points off
@@ -9,6 +10,7 @@ stricter threshold.
 Points and pairs are plain dicts so they serialise straight into the metadata sidecar.
 """
 import itertools
+from collections import Counter
 
 import cv2
 import numpy as np
@@ -177,6 +179,135 @@ def assign_letters(pairs: list[dict], rng: np.random.Generator) -> None:
 
 def points_ab(p: dict) -> tuple[dict, dict]:
     return (p["near"], p["far"]) if p["a_is_near"] else (p["far"], p["near"])
+
+
+def subsample(pairs: list[dict], n: int, rng: np.random.Generator) -> list[dict]:
+    """About n pairs, the same fraction from every group, so the group balance survives."""
+    if n >= len(pairs):
+        return pairs
+    out = []
+    for group in GROUPS:
+        members = [p for p in pairs if p["group"] == group]
+        take = round(n * len(members) / len(pairs))
+        out += [members[i] for i in sorted(rng.choice(len(members), take, replace=False))]
+    return out
+
+
+# ---- point sets: "which of these k points is closest / farthest" -------------------------------------------------
+
+def _key(q: dict) -> tuple[int, int]:
+    return q["y"], q["x"]
+
+
+def candidate_sets(pairs: list[dict], k: int, relation: str, shape: tuple[int, int], cfg: dict,
+                   rng: np.random.Generator) -> list[dict]:
+    """Sets of k points where one target is closer ("closest") or farther ("farthest") than each of the k-1 others
+    by a pair that passed candidate_pairs (and stability, when the caller filtered for it), so the answer carries the
+    same per-pair confidence as a tier-1 pair. Only the target's order is checked, not the order among the others.
+
+    Members come from distinct segments and are at least min_dist_frac * width apart. At most one set per target.
+    """
+    h, w = shape
+    beats = {}  # target key -> (target, [(other, pair)])
+    for p in pairs:
+        t, o = (p["near"], p["far"]) if relation == "closest" else (p["far"], p["near"])
+        beats.setdefault(_key(t), (t, []))[1].append((o, p))
+    out = []
+    for tk in sorted(beats):
+        t, others = beats[tk]
+        if len(others) < k - 1:
+            continue
+        chosen, segs = [], {t["seg"]}
+        for i in rng.permutation(len(others)):
+            o, p = others[i]
+            if o["seg"] in segs or any(np.hypot(o["x"] - c["x"], o["y"] - c["y"]) < cfg["min_dist_frac"] * w
+                                       for c, _ in chosen):
+                continue
+            chosen.append((o, p))
+            segs.add(o["seg"])
+            if len(chosen) == k - 1:
+                break
+        if len(chosen) < k - 1:
+            continue
+        members = [t] + [o for o, _ in chosen]
+        ys = [q["y"] for q in members]
+        out.append({"target": t, "others": [o for o, _ in chosen], "relation": relation, "k": k,
+                    "g": round(min(p["g"] for _, p in chosen), 4),
+                    "groups": [p["group"] for _, p in chosen],
+                    "background": any(q["kind"] == "background" for q in members),
+                    # "lower is closer" prior: the lowest point is the closest, the highest the farthest
+                    "shortcut": t["y"] == (max(ys) if relation == "closest" else min(ys))})
+    return out
+
+
+def per_frame_sets(sets: list[dict], n: int, sizes: dict, p_farthest: float, rng: np.random.Generator) -> list[dict]:
+    """Up to n sets from one frame, never reusing a target segment. Each slot draws its k from `sizes` ({k: share})
+    and its relation from p_farthest, then takes a random unused set of that kind (the slot stays empty if none)."""
+    ks, shares = list(sizes), np.array(list(sizes.values()), float)
+    used, out = set(), []
+    order = [sets[i] for i in rng.permutation(len(sets))]
+    for _ in range(n):
+        k = ks[rng.choice(len(ks), p=shares / shares.sum())]
+        relation = "farthest" if rng.random() < p_farthest else "closest"
+        s = next((s for s in order if s["k"] == k and s["relation"] == relation and s["target"]["seg"] not in used),
+                 None)
+        if s is not None:
+            out.append(s)
+            used.add(s["target"]["seg"])
+    return out
+
+
+def balance_sets(sets: list[dict], bg_share: float, rng: np.random.Generator) -> list[dict]:
+    """Per (k, relation): the "lowest is closest" / "highest is farthest" shortcut hits about 1/k of the sets, as it
+    would by chance, and background sets are capped at bg_share."""
+    out = []
+    for k, relation in sorted({(s["k"], s["relation"]) for s in sets}):
+        bucket = [s for s in sets if s["k"] == k and s["relation"] == relation]
+        hit = [s for s in bucket if s["shortcut"]]
+        miss = [s for s in bucket if not s["shortcut"]]
+        n_hit = min(_capacity(hit, bg_share), _capacity(miss, bg_share) // (k - 1))
+        n_miss = min(_capacity(miss, bg_share), n_hit * (k - 1)) if n_hit else _capacity(miss, bg_share)
+        out += _take(hit, n_hit, bg_share, rng) + _take(miss, n_miss, bg_share, rng)
+    return out
+
+
+def assign_set_letters(sets: list[dict], rng: np.random.Generator) -> None:
+    """Sets set["points"] (the k members in marker order) and two answer positions, each exactly uniform over the k
+    positions within every k: set["slot"], where the target sits among the markers, and set["opt_slot"], where its
+    option sits in a shuffled option list (for prompts whose markers are numbers, not the option letters)."""
+    for k in sorted({s["k"] for s in sets}):
+        members = [s for s in sets if s["k"] == k]
+        slots, opt_slots = (np.arange(len(members)) % k for _ in range(2))
+        rng.shuffle(slots)
+        rng.shuffle(opt_slots)
+        for s, slot, opt_slot in zip(members, slots, opt_slots):
+            others = [s["others"][i] for i in rng.permutation(k - 1)]
+            s["points"] = others[:slot] + [s["target"]] + others[slot:]
+            s["slot"], s["opt_slot"] = int(slot), int(opt_slot)
+
+
+def audit_sets(sets: list[dict], shape_of) -> dict:
+    """Accuracy of label-free shortcuts at picking the target, and how often each marker position is the answer.
+    Shortcuts should be near chance (1/k, reported as `chance`)."""
+    if not sets:
+        return {}
+    hits = {"lowest_is_closest_highest_is_farthest": [], "biggest_segment": [], "nearest_centre": []}
+    slots = Counter()
+    for s in sets:
+        h, w = shape_of(s)
+        pts, t = s["points"], s["slot"]
+        ys = [q["y"] for q in pts]
+        hits["lowest_is_closest_highest_is_farthest"].append(
+            ys.index(max(ys) if s["relation"] == "closest" else min(ys)) == t)
+        areas = [q["area"] for q in pts]
+        hits["biggest_segment"].append(areas.index(max(areas)) == t)
+        dists = [np.hypot(q["x"] - w / 2, q["y"] - h / 2) for q in pts]
+        hits["nearest_centre"].append(dists.index(min(dists)) == t)
+        slots[chr(65 + t)] += 1
+    out = {k: round(float(np.mean(v)), 3) for k, v in hits.items()}
+    out["chance"] = round(float(np.mean([1 / s["k"] for s in sets])), 3)
+    out["target_position"] = {L: round(n / len(sets), 3) for L, n in sorted(slots.items())}
+    return out
 
 
 def audit(pairs: list[dict], shape_of) -> dict:

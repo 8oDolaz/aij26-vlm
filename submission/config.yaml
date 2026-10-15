@@ -25,15 +25,15 @@ depth_tier1:
       # Depth is predicted from all views together; questions are asked on one of them, rotating over the views
       views: [observation.images.image_0, observation.images.image_1, observation.images.image_2]
       min_views: 3           # non-blank views needed at a source frame (many episodes only have image_0)
-      max_episodes: 1500      # evenly spread over the episodes on disk with min_views views (1933 locally)
+      max_episodes: 1000      # evenly spread over the episodes on disk with min_views views (1933 locally)
       min_length: 15
       frames_per_episode: 3
-    fractal:
-      views: [observation.images.image]
-      min_views: 1
-      max_episodes: 200
-      min_length: 15
-      frames_per_episode: 2
+    # fractal:
+    #   views: [observation.images.image]
+    #   min_views: 1
+    #   max_episodes: 200
+    #   min_length: 15
+    #   frames_per_episode: 2
   points:
     edge_radius: 4           # 9x9 window
     edge_max: 0.10           # disparity range in the window, fraction of the frame range
@@ -62,11 +62,21 @@ depth_tier1:
     p_dot: 0.2               # filled-dot markers instead of BLINK rings (free-form prompts only)
     p_blink: 0.6             # BLINK prompt verbatim, ring markers
     p_blink_farther: 0.1     # same, asking for the farther point
+  # Point sets: "which of these 3-4 points is closest / farthest", the target beating every other member by a pair
+  # that passed the gap and stability filters above. Fixes the A/B-only answer prior that pairs alone teach.
+  sets:
+    enabled: true
+    sizes: {3: 0.3, 4: 0.7}    # share of sets by point count
+    max_per_frame: 3
+    p_farthest: 0.3
+    p_numbered: 0.5            # markers 1..k listed under shuffled option letters; else BLINK-like markers A..k
+  # Pair share next to the sets: every balanced set is kept, pairs are subsampled to their share (no total target)
+  question_mix: {pairs: 0.35, sets: 0.65}
 
 # Per-episode question generators (aijgen.generators); their frames are written once per camera listed in episodes.
 generators:
   phase_qa:
-    enabled: true
+    enabled: false
     # where inside a phase run the question frame is sampled, as fractions of the run length
     frame_range: [0.1, 0.9]
     phase_frame_range:
@@ -89,10 +99,10 @@ episodes:
       gripper_dim: 6         # in observation.state
       closed_high: false     # tools/fetch_data.py SOURCES
       min_length: 10
-      max_episodes: 1500     # evenly spread over the episodes with a video for the first camera on disk
-    fractal:
-      cameras: [observation.images.image]
-      gripper_dim: 7
-      closed_high: true
-      min_length: 10
-      max_episodes: 1500
+      max_episodes: 100     # evenly spread over the episodes with a video for the first camera on disk
+    # fractal:
+    #   cameras: [observation.images.image]
+    #   gripper_dim: 7
+    #   closed_high: true
+    #   min_length: 10
+    #   max_episodes: 0

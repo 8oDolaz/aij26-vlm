@@ -1,0 +1,54 @@
+
+### model
+# d2/d3 SFT: the d1 template (configs/vlm_sft/d1_depth_phase.yaml) with changes marked D2.
+# Sized for a SHARED 5090: about 10 GB must stay free for another user, so the per-GPU batch is 1 and
+# gradient accumulation 32 (effective batch stays 4 x 8 = 1 x 32 = 32), and checkpoints hold the model only.
+# Symlinked over /workspace/configs/vlm_sft.yaml in the dev container, see configs/d2_depth_phase.yaml.
+model_name_or_path: HuggingFaceTB/SmolVLM2-500M-Video-Instruct
+image_max_pixels: 822816
+video_max_pixels: 16384
+video_fps: 2.0
+video_maxlen: 64
+trust_remote_code: true
+flash_attn: disabled
+
+### method
+stage: sft
+do_train: true
+do_eval: false
+finetuning_type: full
+freeze_vision_tower: false
+freeze_multi_modal_projector: true
+disable_gradient_checkpointing: false
+# deepspeed path is injected by the pipeline (absolute path to LLaMA-Factory)
+
+### dataset
+# dataset / dataset_dir / output_dir are injected by the pipeline
+template: smolvlm2
+cutoff_len: 4096
+overwrite_cache: true
+preprocessing_num_workers: 16
+dataloader_num_workers: 4
+
+### output
+logging_steps: 10
+save_strategy: steps
+save_steps: 200                  # CHANGED from 500
+save_total_limit: 1              # D2: disk is ~94% full
+plot_loss: true
+overwrite_output_dir: true
+save_only_model: true            # D2: no optimizer state (~4 GB less per checkpoint)
+report_to: none
+
+### train
+seed: 42
+per_device_train_batch_size: 1   # D2: from 4; batch 2 grew past 21 GB within 6 steps (2026-10-15), too much for the shared GPU
+gradient_accumulation_steps: 32  # D2: effective batch 1 x 32 x 1 GPU = 32, as in d1
+learning_rate: 1.0e-5
+num_train_epochs: 1.0
+warmup_ratio: 0.03
+lr_scheduler_type: cosine
+weight_decay: 0.01
+max_grad_norm: 1.0
+bf16: true
+ddp_timeout: 180000000

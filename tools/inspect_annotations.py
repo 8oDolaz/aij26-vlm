@@ -53,9 +53,15 @@ def describe(r: dict, total: int) -> str:
     if m:
         lines.append(f"{DIM}{m['dataset']} ep{m['episode']} f{m['frame_index']} {m['camera'].split('.')[-1]}  "
                      f"task: {m['task']!r}{RESET}")
-        lines.append(f"{DIM}closer: {m['near']}  gap g={m['g']:.2f}  group={m['group']}  "
-                     f"A={m['A']['kind']} d={m['A']['d']:.2f}  B={m['B']['kind']} d={m['B']['d']:.2f}  "
-                     f"background={m['background']}  prompt={m['kind']}{RESET}")
+        if "points" in m:  # 3-4 point set: markers in drawn order, the target starred
+            pts = "  ".join(f"{'*' if i == m['target'] else ''}{name}={q['kind']} d={q['d']:.2f}"
+                            for i, (name, q) in enumerate(zip(m["drawn"], m["points"])))
+            lines.append(f"{DIM}{m['relation']}: {m['near']}  min gap g={m['g']:.2f}  {pts}  "
+                         f"background={m['background']}  prompt={m['kind']}{RESET}")
+        else:
+            lines.append(f"{DIM}closer: {m['near']}  gap g={m['g']:.2f}  group={m['group']}  "
+                         f"A={m['A']['kind']} d={m['A']['d']:.2f}  B={m['B']['kind']} d={m['B']['d']:.2f}  "
+                         f"background={m['background']}  prompt={m['kind']}{RESET}")
     elif (pm := r.get("pmeta")):
         lines.append(f"{DIM}{pm['dataset']} ep{pm['episode']} f{pm['frame']}/{pm.get('length', '?')} {pm['camera']}  task: {pm['task']!r}{RESET}")
         lines.append(f"{DIM}gripper state={pm['gripper_state']}  action={pm['gripper_action']}  "
