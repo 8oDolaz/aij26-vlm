@@ -1,0 +1,38 @@
+# Fractal (RT-1) closed dictionary for tools/sam3_probe.py: every object SAM 3 is asked for on a Fractal frame.
+# Fractal instructions name a fixed set of ~20 objects; all of them are here, plus the drawers they go into.
+#
+# One object per line. Names on one line, separated by " / ", are the same kind of object: where their boxes overlap
+# strongly, only the best-scoring one is kept. Names ending in the same word ("coke can", "pepsi can") count as similar
+# too. "name = prompt" asks SAM 3 with `prompt` and labels the box `name` (SAM 3 does not know the RXBAR brand).
+
+# cans
+coke can
+pepsi can
+7up can
+redbull can
+green can = green soda can
+orange can = orange soda can
+
+# bottles
+blue plastic bottle
+water bottle
+
+# chip bags
+green rice chip bag
+green jalapeno chip bag
+brown chip bag
+blue chip bag
+
+# snack bars
+rxbar chocolate = chocolate snack bar / rxbar blueberry = blueberry snack bar
+
+# fruit, bowl, sponge
+apple
+orange
+banana
+white bowl / paper bowl
+sponge
+
+# fixtures (large boxes are dropped by --max-area)
+drawer
+fridge

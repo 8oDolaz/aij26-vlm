@@ -1,0 +1,75 @@
+# Bridge closed dictionary for tools/sam3_probe.py: every object SAM 3 is asked for on a Bridge frame.
+# Hand-picked from the parsed instruction nouns (most frequent first) and from objects seen in the toy-kitchen scenes.
+#
+# One object per line. Names on one line, separated by " / ", are the same kind of object: where their boxes overlap
+# strongly, only the best-scoring one is kept. Names ending in the same word ("silver pot", "pot") count as similar too.
+# "name = prompt" asks SAM 3 with `prompt` and labels the box `name`.
+# Names whose last word is in the probe's --exclude list (lid, glass, hole, circle, object, ...) are skipped.
+
+# cookware and containers
+pot / pan / saucepan
+bowl
+colander / strainer
+basket / dish rack
+plate
+cup / mug
+can / tin = tin can
+cooker = rice cooker
+bottle
+box
+bucket
+tray
+
+# utensils
+spoon
+ladle
+spatula
+fork
+knife
+brush
+
+# textiles
+cloth / towel / napkin / fabric
+sponge
+
+# toy food
+banana
+carrot
+corn = corn cob
+eggplant
+mushroom
+potato
+tomato
+cucumber
+broccoli
+strawberry
+pepper = bell pepper / capsicum
+bread
+croissant
+cheese
+egg
+sushi
+orange
+apple
+lemon
+grapes
+pear
+chicken leg / drumstick / chicken wing
+fish
+
+# toys; the block shapes share a line: one block gets one shape name
+stuffed animal
+doll
+duck = toy duck
+block = toy block / cube = toy cube / cylinder = toy cylinder / arch = toy arch / triangle = triangle block / rectangle = rectangular block / hexagon = hexagon block
+ball
+
+# kitchen fixtures (large boxes are dropped by --max-area)
+sink / basin
+stove / cooktop / stovetop
+burner
+microwave
+oven
+washing machine
+faucet
+drawer
