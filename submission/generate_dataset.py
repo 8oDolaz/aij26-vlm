@@ -12,8 +12,10 @@ Image paths are relative to the JSONL's directory, which the kit's run_pipeline.
 """
 import argparse
 import json
+import re
 import sys
 import zlib
+from collections import Counter
 from pathlib import Path
 
 import numpy as np
@@ -40,6 +42,15 @@ def depth_records(input_root: Path, out: Path, cfg: dict, relabel: bool = False)
             r["images"] = [str(Path(p).resolve().relative_to(out.resolve())) for p in r["images"]]
             records.append(r)
     return records, {k: report.get(k, {}) for k in ("funnel", "final_by_dataset", "final_by_camera", "timing")}
+
+
+def letter_shares(records: list[dict]) -> dict:
+    """Share of each answer letter over all records answered with a bare letter (docs/vlm_data_priorities.md #0:
+    a skewed mix teaches a default letter)."""
+    letters = Counter(r["messages"][1]["content"] for r in records
+                      if re.fullmatch(r"[A-J]", r["messages"][1]["content"]))
+    n = sum(letters.values())
+    return {"letter_records": n, **{k: round(v / n, 4) for k, v in sorted(letters.items())}}
 
 
 def main() -> None:
@@ -73,6 +84,7 @@ def main() -> None:
         stats.setdefault("mix", {})[name] = {"generated": len(sources[name]), "kept": len(recs)}
         records += recs
     records = [records[i] for i in np.random.default_rng(seed).permutation(len(records))]
+    stats["answer_letters"] = letter_shares(records)
 
     with open(jsonl, "w") as f:
         for r in records:
@@ -80,6 +92,7 @@ def main() -> None:
     stats["total"] = len(records)
     jsonl.with_suffix(".stats.json").write_text(json.dumps(stats, indent=1))
     print(json.dumps(stats.get("mix", {}), indent=1))
+    print("answer letters:", json.dumps(stats["answer_letters"]))
     print(f"wrote {len(records)} records to {jsonl}")
 
 

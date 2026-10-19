@@ -9,6 +9,12 @@ Dev-only scripts. Nothing here ships in the ZIP, and `submission/` must not impo
 - `verify_submission.sh`: run **on the GPU server host**. Checks a ZIP in a fresh `--network none` container from the
   untouched organizers' image, with the submission mounted read-only at the judge path. Never verify in the dev container.
 
+- `scene_qa_sheet.py`: hand check of the SAM 3 scene questions (`aijgen.scene`, docs/sam3_vqa_plan.md). Runs
+  `scene_qa` on `--episodes` per dataset (GPU box; SAM 3 + DA3, cached per frame) and writes one contact sheet per
+  template plus `review.jsonl` to report wrong labels by id.
+- `sam3_probe.py`: SAM 3 detection probe (instruction / closed-dictionary / negative-control vocabularies); shares the
+  dictionaries and box filter with `scene_qa` (`submission/src/aijgen/scene/`).
+
 - `fetch_data.py`: download Bridge, Fractal and Language Table at the organizers' pinned commits into `/data/raw/<name>/`.
   Always fetches `meta/` and `data/` (~0.75 GB in all); video is either complete (`--full`) or a deterministic
   subset of files picked from that metadata (usable episodes, new instructions, multi-view for Bridge) within

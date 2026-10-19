@@ -4,6 +4,7 @@ Each Question is written once per camera that has a non-blank frame at all of it
 the same moment). Frames go to <out>/frames/<dataset>/; records reference them relative to <out>.
 """
 import json
+import zlib
 from collections import Counter
 from pathlib import Path
 
@@ -17,7 +18,7 @@ from aijgen.generators.episodes import load_episodes
 
 def generate(input_root: Path, out: Path, config: dict, relabel: bool = False) -> tuple[dict[str, list[dict]], dict]:
     """({generator name: ShareGPT records}, stats). Image paths are relative to `out`."""
-    generators = build_generators(config)
+    generators = build_generators(config, work_root=out)
     ecfg = config["episodes"]
     records, stats = {g.name: [] for g in generators}, Counter()
     if not generators:
@@ -77,7 +78,13 @@ def generate(input_root: Path, out: Path, config: dict, relabel: bool = False) -
                             continue
                         paths = []
                         for f, im in zip(q.frames, imgs):
-                            rel = Path("frames") / ds_name / f"ep{ep.index:06d}_f{f:04d}_{cam.split('.')[-1]}.jpg"
+                            stem = f"ep{ep.index:06d}_f{f:04d}_{cam.split('.')[-1]}"
+                            if q.overlays:  # markers make the image specific to this question
+                                from aijgen.scene.render import draw_overlays
+                                tag = zlib.crc32(json.dumps(q.overlays, sort_keys=True).encode())
+                                stem += f"_{q.kind}_{tag:08x}"
+                                im = draw_overlays(im, q.overlays)
+                            rel = Path("frames") / ds_name / f"{stem}.jpg"
                             if not (out / rel).exists():
                                 (out / rel).parent.mkdir(parents=True, exist_ok=True)
                                 Image.fromarray(im).save(out / rel, quality=95)

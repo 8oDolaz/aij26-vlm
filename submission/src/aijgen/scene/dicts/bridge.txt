@@ -1,10 +1,11 @@
-# Bridge closed dictionary for tools/sam3_probe.py: every object SAM 3 is asked for on a Bridge frame.
+# Bridge closed dictionary for SAM 3 (aijgen.scene, tools/sam3_probe.py): every object asked for on a Bridge frame.
 # Hand-picked from the parsed instruction nouns (most frequent first) and from objects seen in the toy-kitchen scenes.
 #
 # One object per line. Names on one line, separated by " / ", are the same kind of object: where their boxes overlap
 # strongly, only the best-scoring one is kept. Names ending in the same word ("silver pot", "pot") count as similar too.
 # "name = prompt" asks SAM 3 with `prompt` and labels the box `name`.
-# Names whose last word is in the probe's --exclude list (lid, glass, hole, circle, object, ...) are skipped.
+# Names whose last word is in the exclude list (aijgen.scene.vocab.DEFAULT_EXCLUDE: lid, glass, hole, circle, object,
+# ...) are skipped.
 
 # cookware and containers
 pot / pan / saucepan

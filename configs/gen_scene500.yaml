@@ -1,0 +1,79 @@
+# Quick ~500-record run of the SAM 3 scene questions only (docs/sam3_vqa_plan.md, aijgen.scene), for inspection and
+# the per-template hand check. depth_tier1 and phase_qa are off (configs/gen_quick500.yaml covers those).
+# Same scene_qa settings as submission/config.yaml except the episode counts and the mix cap (marked QUICK).
+#
+# Expected yield: ~4-6 questions per source frame (one per template that finds what it needs), 2 frames per episode,
+# so 70 episodes give ~600-800 questions; the cap samples 500 of them across both datasets.
+# Detections are cached in <output dir>/scene_qa/cache/: re-running with other filter / scene / template settings and
+# --relabel loads no model.
+#
+# On the GPU box, from the repo root in the dev container (da3_src is relative to it); facebook/sam3 is gated, so the
+# HF token must be visible in the container:
+#   python submission/generate_dataset.py --input /data/raw --output /data/gen/scene500/annotations.jsonl \
+#     --config configs/gen_scene500.yaml
+seed: 0
+
+mix:
+  scene_qa: 500              # QUICK
+
+generators:
+  scene_qa:
+    enabled: true
+    seed: 42
+    sam3_model: facebook/sam3              # gated HF id
+    depth_model: depth-anything/DA3-BASE   # Apache-2.0; all views of a moment go into one call
+    da3_src: example/depth-anything-3/src  # depth_anything_3 package
+    da3_process_res: 504
+    frames_span: [0.05, 0.35]              # early in the episode: objects not yet moved
+    frames_per_episode: 2
+    min_length: 10
+    min_frame_std: 8.0                     # flatter views are blank cameras
+    datasets:                              # question views rotate over the non-blank ones
+      bridge:
+        views: [observation.images.image_0, observation.images.image_1, observation.images.image_2]
+      fractal:
+        views: [observation.images.image]
+    detection:                             # changing these recomputes cached frames
+      mask_min: 0.5
+      negatives_per_frame: 8
+      depth_erode_frac: 0.01
+    filter:                                # aijgen.scene.detect.FilterParams
+      threshold: 0.85
+      max_area: 0.4
+      dup_iou: 0.7
+      contain: 0.85
+      conflict_iou: 0.7
+      margin: 0.15
+      uncertain: 0.3
+    scene:
+      exclude_subjects: [stove, stovetop, cooktop, basin]
+      absent_presence: 0.05
+      max_count: 6
+    templates:                             # per_frame = max questions per source frame
+      relation_embspatial: {per_frame: 1, gap_frac: 0.02}
+      relation_blink: {per_frame: 1, gap_frac: 0.02}
+      relation_msmu: {per_frame: 1, gap_frac: 0.02}
+      close_embspatial: {per_frame: 1, n_options: 4, margin: 0.10}
+      far_embspatial: {per_frame: 1, n_options: 4, margin: 0.10}
+      pointing_erqa: {per_frame: 1, p_letters: 0.3, min_dot_dist: 0.08, erode_frac: 0.015}
+      localization_blink: {per_frame: 1, iou: [0.3, 0.65], min_area: 0.003}
+      existence_msmu: {per_frame: 1, p_present: 0.3}
+      counting_blink: {per_frame: 1}
+      counting_msmu: {per_frame: 1}
+
+# Datasets the per-episode generators read (aijgen.generators.episodes), evenly spread over the episodes on disk
+episodes:
+  min_frame_std: 8.0
+  datasets:
+    bridge:
+      cameras: [observation.images.image_0, observation.images.image_1, observation.images.image_2]
+      gripper_dim: 6
+      closed_high: false
+      min_length: 10
+      max_episodes: 35       # QUICK
+    fractal:
+      cameras: [observation.images.image]
+      gripper_dim: 7
+      closed_high: true
+      min_length: 10
+      max_episodes: 35       # QUICK

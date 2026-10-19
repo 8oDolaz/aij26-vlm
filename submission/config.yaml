@@ -6,7 +6,7 @@ seed: 0
 mix:
   depth_tier1: 2000
   phase_qa: 3000
-  object_qa: 3000
+  scene_qa: null             # keep every scene question generated
 
 # Relative-depth Tier 1: BLINK-style point pairs (docs/relative_depth_plan.md, section 5).
 # Gap thresholds are in per-frame normalised disparity (p2..p98 -> 0..1), calibrated on NYU-v2 (section 2.2) with
@@ -74,14 +74,51 @@ generators:
     seed: 42
     merge_phases: true
     labeled_phases: [pre_grasp, contact, post_grasp]
-  object_qa:
+  # SAM 3 scene questions (docs/sam3_vqa_plan.md, aijgen.scene). Detections are cached in <output>/scene_qa/cache/,
+  # so filter / scene / templates can be re-tuned with --relabel without a GPU.
+  scene_qa:
     enabled: true
     seed: 42
-    sam_model: facebook/sam2.1-hiera-small
-    siglip_model: google/siglip-base-patch16-256
-    score_threshold: 0.40
-    frames_span: [0.05, 0.35]
+    sam3_model: facebook/sam3              # gated HF id in dev; a path under submission/ in the packed ZIP (bf16)
+    depth_model: depth-anything/DA3-BASE   # Apache-2.0; all views of a moment go into one call
+    da3_src: example/depth-anything-3/src  # depth_anything_3 package; a path under submission/ wins if present
+    da3_process_res: 504
+    frames_span: [0.05, 0.35]              # early in the episode: objects not yet moved
     frames_per_episode: 2
+    min_length: 10
+    min_frame_std: 8.0                     # flatter views are blank cameras
+    datasets:                              # question views rotate over the non-blank ones; dictionaries in aijgen/scene/dicts/
+      bridge:
+        views: [observation.images.image_0, observation.images.image_1, observation.images.image_2]
+      fractal:
+        views: [observation.images.image]
+    detection:                             # changing these recomputes cached frames
+      mask_min: 0.5                        # masks for boxes scoring at least this
+      negatives_per_frame: 8               # absent-list names asked per frame (existence questions)
+      depth_erode_frac: 0.01               # mask erosion before the median depth, fraction of the width
+    filter:                                # aijgen.scene.detect.FilterParams
+      threshold: 0.85                      # min box score; tuned on the probe's closed-dictionary sheets
+      max_area: 0.4
+      dup_iou: 0.7
+      contain: 0.85
+      conflict_iou: 0.7
+      margin: 0.15
+      uncertain: 0.3                       # boxes between this and threshold block subjects, counts and absence
+    scene:
+      exclude_subjects: [stove, stovetop, cooktop, basin]   # fire on other objects (stove on burners)
+      absent_presence: 0.05
+      max_count: 6
+    templates:                             # aijgen.scene.templates; per_frame = max questions per source frame
+      relation_embspatial: {per_frame: 1, gap_frac: 0.02}
+      relation_blink: {per_frame: 1, gap_frac: 0.02}
+      relation_msmu: {per_frame: 1, gap_frac: 0.02}
+      close_embspatial: {per_frame: 1, n_options: 4, margin: 0.10}   # margin in normalised disparity
+      far_embspatial: {per_frame: 1, n_options: 4, margin: 0.10}
+      pointing_erqa: {per_frame: 1, p_letters: 0.3, min_dot_dist: 0.08, erode_frac: 0.015}
+      localization_blink: {per_frame: 1, iou: [0.3, 0.65], min_area: 0.003}
+      existence_msmu: {per_frame: 1, p_present: 0.3}
+      counting_blink: {per_frame: 1}
+      counting_msmu: {per_frame: 1}
 
 # Datasets the per-episode generators read (aijgen.generators.episodes)
 episodes:

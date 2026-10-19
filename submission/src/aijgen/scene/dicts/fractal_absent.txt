@@ -1,0 +1,38 @@
+# Objects that should never be in a Fractal (RT-1) frame (office micro-kitchen: counters, drawers, fridges with cans,
+# bottles, chip bags, fruit). Source of "absent" answers for MSMU-style existence questions.
+# A name is only used on a frame after SAM 3 confirms it there (presence below scene.absent_presence and no box at or
+# above filter.uncertain), so a wrong entry costs questions, not labels.
+# Mostly Bridge's toy food and tools (the probe's negative control: 1% false hits), plus large non-kitchen objects.
+# Left out on purpose: anything an office kitchen may hold (chairs, tables, sinks, coffee machines, trash bins,
+# laptops, plants, people) and names sharing a last word with fractal.txt.
+# One name per line.
+eggplant
+carrot
+corn cob
+mushroom
+potato
+tomato
+cucumber
+broccoli
+strawberry
+bell pepper
+croissant
+sushi
+grapes
+chicken leg
+toy duck
+stuffed animal
+saucepan
+ladle
+spatula
+colander
+bicycle
+car
+bed
+bathtub
+toilet
+guitar
+traffic cone
+umbrella
+skateboard
+helmet

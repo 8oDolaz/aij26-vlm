@@ -30,7 +30,8 @@ class DepthTeacher:
             from depth_anything_3.utils.io.input_processor import InputProcessor
             from huggingface_hub import snapshot_download
             from safetensors.torch import load_file
-            path = Path(snapshot_download(model_id, allow_patterns=["config.json", "model.safetensors"]))
+            path = (Path(model_id) if Path(model_id).is_dir()  # local copy, e.g. shipped in the submission ZIP
+                    else Path(snapshot_download(model_id, allow_patterns=["config.json", "model.safetensors"])))
             name = json.loads((path / "config.json").read_text())["model_name"]
             self.net = create_object(load_config(MODEL_REGISTRY[name]))
             state = {k.removeprefix("model."): v for k, v in load_file(path / "model.safetensors").items()}

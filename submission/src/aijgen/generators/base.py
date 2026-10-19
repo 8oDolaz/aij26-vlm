@@ -29,6 +29,7 @@ class Question:
     frames: list[int]                         # frame indices in the episode, one image each, in order
     kind: str                                 # generator name, for statistics
     meta: dict = field(default_factory=dict)  # debug info, not written to the JSONL
+    overlays: list[dict] = field(default_factory=list)  # markers drawn on every image (aijgen.scene.render)
 
 
 @dataclass

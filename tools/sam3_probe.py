@@ -6,17 +6,12 @@ box confidence x presence. It names nothing by itself, so every box is named by 
 Each frame is encoded once and every name is queried against it. The same raw answers are then filtered per vocabulary:
   instr  the episode's instruction nouns, mapped onto the dataset dictionary ("small knife" -> knife,
          "spaghetti laddle" -> ladle); names that map to nothing are listed in summary.txt
-  dict   the whole closed dictionary of the dataset (tools/sam3_vocab/<dataset>.txt)
+  dict   the whole closed dictionary of the dataset (submission/src/aijgen/scene/dicts/<dataset>.txt)
   neg    negative control: 3 entries of another dataset's dictionary that share no word with this dataset's
          (chip bags on a Bridge frame, pots on a Fractal one). Almost surely absent, so their boxes are false positives.
 
-Box filtering, per vocabulary and frame, best score first:
-  1. boxes below --threshold or covering more than --max-area of the frame are dropped;
-  2. a box on the same region (IoU > --dup-iou, or one --contain inside the other) as a kept box of the same or a
-     similar name is a duplicate and dropped. Similar: same dictionary line ("pot / pan") or same last word
-     ("coke can", "pepsi can");
-  3. a box overlapping a kept box of an unrelated name (IoU > --conflict-iou) is dropped if it scores clearly lower
-     (by --margin); on a near tie both boxes are dropped (ambiguous: the name cannot be trusted).
+Box filtering, per vocabulary and frame: aijgen.scene.detect.select (the same rules the scene_qa generator uses),
+with --threshold, --max-area, --dup-iou, --contain, --conflict-iou and --margin.
 
 Writes to --out:
   sheet_<vocab>_<page>.jpg  kept boxes (name + score, "x2+" if the name is kept more than once on the frame);
@@ -31,27 +26,25 @@ facebook/sam3 is gated: request access on Hugging Face, then make the token visi
 to check the code path without access; its boxes are meaningless.
 """
 import argparse
-import difflib
 import json
 import re
 import sys
 import time
 from collections import Counter, defaultdict
-from dataclasses import dataclass
 from pathlib import Path
 
 import cv2
 import numpy as np
 import torch
-from PIL import Image
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "submission" / "src"))
 from aijgen.depth.lerobot import list_episodes, read_frames  # noqa: E402
+from aijgen.scene.detect import Sam3, select  # noqa: E402
+from aijgen.scene.vocab import (DEFAULT_EXCLUDE, DICT_DIR, Entry, load_dictionary, map_to_dictionary,  # noqa: E402
+                                name_ok)
 
-DICT_DIR = REPO / "tools" / "sam3_vocab"
 VOCABS = ("instr", "dict", "neg")
-RAW_MIN_SCORE = 0.05            # answers kept in records.jsonl
 SWEEP = (0.3, 0.4, 0.5, 0.6)    # thresholds for the present-vs-absent table
 MIN_FRAME_STD = 8.0             # flatter frames are blank cameras
 TILE_H, COLS, ROWS = 360, 3, 4
@@ -74,16 +67,7 @@ SPLIT = re.compile(r"[,;.]|\b(?:and|then|into|onto|in|on|to|from|of|at|by|near|b
 DROP = {"the", "a", "an", "two", "three", "some", "its", "their", "this", "that", "other", "another", "left", "right",
         "top", "bottom", "middle", "center", "centre", "front", "back", "upper", "lower", "side", "edge", "corner",
         "upright", "one", "ones"} | VERBS | PARTICLES
-SURFACES = {"table", "tabletop", "table top", "counter", "surface", "floor", "wall", "place", "position",
-            "robot", "gripper", "arm", "robot arm", "robot gripper"}
 MAX_TASK_WORDS = 20  # longer "instructions" are mostly captions or junk ("Look at the sequence of images...")
-# Names whose last word is one of these are dropped, from instructions and dictionaries: too vague to ground
-# ("red object", "yellow thing") or unreliable. Overridable with --exclude.
-DEFAULT_EXCLUDE = ("object", "thing", "item", "stuff", "something", "anything", "piece", "shelf", "objects", "things",
-                   "items", "glass", "hole", "lid", "circle")
-# A name made only of these is no object ("purple" from "purple piece of cloth"); "orange" is left out: it is a fruit.
-COLOR_WORDS = {"red", "blue", "green", "yellow", "purple", "pink", "black", "white", "brown", "grey", "gray", "silver",
-               "gold", "golden", "small", "big", "large", "little", "dark", "light", "tiny"}
 IRREGULAR = {"knives": "knife", "shelves": "shelf", "leaves": "leaf", "loaves": "loaf"}
 
 
@@ -108,13 +92,6 @@ def singular(word: str) -> str:
     return word
 
 
-def name_ok(name: str, exclude) -> bool:
-    """False for surfaces, excluded heads ("red object", "lid") and colour/size-only names ("purple")."""
-    words = name.split()
-    return (len(name) >= 3 and name not in SURFACES and words[-1] not in exclude
-            and not all(w in COLOR_WORDS for w in words))
-
-
 def instruction_names(task: str, exclude=DEFAULT_EXCLUDE, max_words: int = 4) -> list[str]:
     """Object noun phrases of an instruction, in order, without verbs, articles, positions, surfaces or `exclude`d
     heads."""
@@ -131,40 +108,8 @@ def instruction_names(task: str, exclude=DEFAULT_EXCLUDE, max_words: int = 4) ->
 
 
 # ---------------------------------------------------------------------------------------------------------------------
-# Closed dictionary
+# Closed dictionary (aijgen.scene.vocab)
 # ---------------------------------------------------------------------------------------------------------------------
-@dataclass(frozen=True)
-class Entry:
-    name: str    # label of the box
-    prompt: str  # phrase SAM 3 is asked with
-    group: str   # names on one dictionary line share it
-
-
-def load_dictionary(path: Path, exclude) -> dict[str, Entry]:
-    """name -> Entry from a dictionary file (format in tools/sam3_vocab/*.txt)."""
-    entries = {}
-    for i, line in enumerate(path.read_text().splitlines()):
-        line = line.split("#", 1)[0].strip().lower()
-        for part in filter(None, (p.strip() for p in line.split("/"))):
-            name, _, prompt = (s.strip() for s in part.partition("="))
-            if name_ok(name, exclude):
-                entries[name] = Entry(name, prompt or name, f"{path.stem}:{i}")
-    return entries
-
-
-def map_to_dictionary(name: str, entries: dict[str, Entry]) -> str | None:
-    """The dictionary entry an instruction name refers to: the name itself, else the longest entry it ends with
-    ("small knife" -> knife), else an entry spelled almost like its last word ("laddle" -> ladle)."""
-    if name in entries:
-        return name
-    words = name.split()
-    tails = [e for e in entries if words[-len(e.split()):] == e.split()]
-    if tails:
-        return max(tails, key=lambda e: len(e.split()))
-    close = difflib.get_close_matches(words[-1], [e for e in entries if " " not in e], n=1, cutoff=0.85)
-    return close[0] if close else None
-
-
 def mapped_names(task: str, entries: dict[str, Entry], exclude) -> tuple[list[str], list[str]]:
     """(dictionary names of the instruction's objects, instruction names that map to nothing)."""
     mapped, unmapped = [], []
@@ -175,11 +120,6 @@ def mapped_names(task: str, entries: dict[str, Entry], exclude) -> tuple[list[st
         elif e not in mapped:
             mapped.append(e)
     return mapped, unmapped
-
-
-def similar(a: str, b: str, entries: dict[str, Entry]) -> bool:
-    """Same name, same dictionary line ("pot / pan") or same last word ("coke can", "pepsi can")."""
-    return a == b or entries[a].group == entries[b].group or a.split()[-1] == b.split()[-1]
 
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -221,108 +161,6 @@ def coverage(root: Path, cam: str, entries, exclude) -> tuple[float, Counter]:
         unmapped.update(set(u))
         full += bool(m) and not u
     return full / max(len(eps), 1), unmapped
-
-
-# ---------------------------------------------------------------------------------------------------------------------
-# Model
-# ---------------------------------------------------------------------------------------------------------------------
-class Sam3:
-    def __init__(self, model_id: str, device: str, dtype: torch.dtype, smoke: bool):
-        from transformers import Sam3Model, Sam3Processor
-        if smoke:
-            from transformers import CLIPTokenizerFast, Sam3Config, Sam3ImageProcessorFast
-            tok = CLIPTokenizerFast.from_pretrained("openai/clip-vit-base-patch32")
-            self.processor = Sam3Processor(Sam3ImageProcessorFast(), tok)
-            torch.manual_seed(0)
-            self.model = Sam3Model(Sam3Config())
-        else:
-            try:
-                self.processor = Sam3Processor.from_pretrained(model_id)
-                self.model = Sam3Model.from_pretrained(model_id)
-            except OSError as e:
-                sys.exit(f"cannot load {model_id}: {e}\nfacebook/sam3 is gated: request access on Hugging Face and log in "
-                         "(hf auth login, or HF_TOKEN) inside the container.")
-        self.model.to(device=device, dtype=dtype).eval()
-        self.device, self.dtype = device, dtype
-        self.text = {}
-
-    def _sync(self):
-        if self.device == "cuda":
-            torch.cuda.synchronize()
-
-    @torch.inference_mode()
-    def encode(self, rgb: np.ndarray):
-        pv = self.processor(images=Image.fromarray(rgb), return_tensors="pt")["pixel_values"]
-        out = self.model.get_vision_features(pixel_values=pv.to(self.device, self.dtype))
-        self._sync()
-        return out
-
-    @torch.inference_mode()
-    def query(self, vision, prompt: str, size: tuple[int, int], masks: bool = False, mask_min: float = 0.0) -> dict:
-        """Presence probability, boxes (xyxy pixels) and scores >= RAW_MIN_SCORE; if asked, masks (bool HxW) aligned
-        with the boxes, None for boxes scoring below mask_min (saves memory)."""
-        if prompt not in self.text:
-            self.text[prompt] = {k: v.to(self.device) for k, v in self.processor(text=prompt, return_tensors="pt").items()}
-        out = self.model(vision_embeds=vision, **self.text[prompt])
-        presence = 1.0 if out.presence_logits is None else float(out.presence_logits.float().sigmoid().max())
-        post = (self.processor.post_process_instance_segmentation if masks
-                else self.processor.post_process_object_detection)
-        r = post(out, threshold=RAW_MIN_SCORE, target_sizes=[size])[0]
-        self._sync()
-        ans = {"presence": round(presence, 4),
-               "scores": [round(float(s), 4) for s in r["scores"].float().cpu()],
-               "boxes": [[round(float(v), 1) for v in b] for b in r["boxes"].float().cpu()]}
-        if masks:
-            ans["masks"] = [m.bool().cpu().numpy() if s >= mask_min else None for m, s in zip(r["masks"], ans["scores"])]
-        return ans
-
-
-# ---------------------------------------------------------------------------------------------------------------------
-# Filtering
-# ---------------------------------------------------------------------------------------------------------------------
-def area(b) -> float:
-    return max(0.0, b[2] - b[0]) * max(0.0, b[3] - b[1])
-
-
-def overlaps(a, b) -> tuple[float, float]:
-    """(IoU, intersection over the smaller box)."""
-    inter = max(0.0, min(a[2], b[2]) - max(a[0], b[0])) * max(0.0, min(a[3], b[3]) - max(a[1], b[1]))
-    union = area(a) + area(b) - inter
-    return (inter / union if union > 0 else 0.0), (inter / min(area(a), area(b)) if min(area(a), area(b)) > 0 else 0.0)
-
-
-def select(answers: dict, names: list[str], entries: dict[str, Entry], frame_area: float, args) -> dict:
-    """Kept boxes for one vocabulary, the ambiguous ones, and counts of what was dropped (see the module docstring)."""
-    cands = sorted(({"name": n, "box": b, "score": s, "mask": m} for n in names for b, s, m in
-                    zip(answers[n]["boxes"], answers[n]["scores"], answers[n].get("masks") or [None] * len(answers[n]["boxes"]))
-                    if s >= args.threshold), key=lambda c: -c["score"])
-    kept, ambiguous = [], []
-    res = {"too_big": 0, "duplicate": 0, "lost": 0}
-    for c in cands:
-        if area(c["box"]) > args.max_area * frame_area:
-            res["too_big"] += 1
-            continue
-        claimed = kept + ambiguous  # regions already taken, by a trusted or a contested box
-        if any(similar(o["name"], c["name"], entries) and
-               (lambda i, m: i > args.dup_iou or m > args.contain)(*overlaps(o["box"], c["box"])) for o in claimed):
-            res["duplicate"] += 1
-            continue
-        rivals = [o for o in claimed if not similar(o["name"], c["name"], entries)
-                  and overlaps(o["box"], c["box"])[0] > args.conflict_iou]
-        if not rivals:
-            kept.append(c)
-        elif all(o in kept and o["score"] - c["score"] > args.margin for o in rivals):
-            res["lost"] += 1
-        else:  # near tie with a kept box, or a region already contested: no name here can be trusted
-            for o in rivals:
-                if o in kept and o["score"] - c["score"] <= args.margin:
-                    kept.remove(o)
-                    ambiguous.append(o)
-            ambiguous.append(c)
-    counts = Counter(k["name"] for k in kept)
-    for k in kept:
-        k["unique"] = counts[k["name"]] == 1
-    return res | {"kept": kept, "ambiguous": ambiguous}
 
 
 # ---------------------------------------------------------------------------------------------------------------------

@@ -1,4 +1,5 @@
-# Fractal (RT-1) closed dictionary for tools/sam3_probe.py: every object SAM 3 is asked for on a Fractal frame.
+# Fractal (RT-1) closed dictionary for SAM 3 (aijgen.scene, tools/sam3_probe.py): every object asked for on a Fractal
+# frame.
 # Fractal instructions name a fixed set of ~20 objects; all of them are here, plus the drawers they go into.
 #
 # One object per line. Names on one line, separated by " / ", are the same kind of object: where their boxes overlap
