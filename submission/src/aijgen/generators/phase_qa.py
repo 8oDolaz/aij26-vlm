@@ -35,11 +35,11 @@ class PhaseGenerator(Generator):
 
     def __init__(self, cfg: dict):
         super().__init__(cfg)
-        self.frame_range = tuple(cfg["frame_range"])
-        self.min_phase_seconds = float(cfg["min_phase_seconds"])
-        self.release_min_distance = float(cfg["release_min_distance"])
+        self.frame_range = tuple(cfg.get("frame_range", [0.1, 0.9]))
+        self.min_phase_seconds = float(cfg.get("min_phase_seconds", 0.5))
+        self.release_min_distance = float(cfg.get("release_min_distance", 0.05))
 
-        if cfg["merge_phases"]:
+        if cfg.get("merge_phases", True):
             self.names = ("pre_grasp", "contact", "post_grasp")
             self.text = MERGED_TEXT
             to_name = MERGE
@@ -50,8 +50,8 @@ class PhaseGenerator(Generator):
         # phase index of aijgen.phases -> index in self.names; merged: [0, 0, 1, 2, 2]
         self.to_index = np.array([self.names.index(to_name[p]) for p in ph.PHASES])
 
-        self.labeled_phases = set(cfg["labeled_phases"])
-        self.phase_frame_range = {p: tuple(r) for p, r in cfg["phase_frame_range"].items()}
+        self.labeled_phases = set(cfg.get("labeled_phases", ["pre_grasp", "contact", "post_grasp"]))
+        self.phase_frame_range = {p: tuple(r) for p, r in cfg.get("phase_frame_range", {}).items()}
         unknown = (self.labeled_phases | set(self.phase_frame_range)) - set(self.names)
         if unknown:
             raise ValueError(f"Unknown phases in config: {unknown} (allowed: {self.names})")
@@ -69,7 +69,8 @@ class PhaseGenerator(Generator):
             if phase not in self.labeled_phases:
                 continue
 
-            duration = (end - start + 1) / ep.fps          # seconds
+            fps = ep.fps if ep.fps > 0 else 10.0
+            duration = (end - start + 1) / fps          # seconds
             if duration < self.min_phase_seconds:
                 continue
             
@@ -104,7 +105,7 @@ class PhaseGenerator(Generator):
         candidates = []
         for t in range(start, end + 1):
             moved = float(np.linalg.norm(ep.state[t, 0:3] - release_pos))
-            if ep.closedness[t] <= ph.GRASP_THRESHOLD and moved >= self.release_min_distance:
+            if ep.closedness is not None and ep.closedness[t] <= ph.GRASP_THRESHOLD and moved >= self.release_min_distance:
                 candidates.append((t, moved))
         if not candidates:
             return None

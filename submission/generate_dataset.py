@@ -22,17 +22,24 @@ import yaml
 sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 
 
-def depth_records(input_root: Path, out: Path, cfg: dict) -> tuple[list[dict], dict]:
+def depth_records(input_root: Path, out: Path, cfg: dict, relabel: bool = False) -> tuple[list[dict], dict]:
     from aijgen.depth import tier1
     work = out / "depth_tier1"
-    report = tier1.generate(argparse.Namespace(input=input_root, output=work, relabel=False, max_episodes=None), cfg)
+    ann_file = work / "annotations.jsonl"
+    report_file = work / "report.json"
+    if not relabel and ann_file.exists() and report_file.exists():
+        print(f"depth_tier1: reusing existing {ann_file}", flush=True)
+        with open(report_file) as f:
+            report = json.load(f)
+    else:
+        report = tier1.generate(argparse.Namespace(input=input_root, output=work, relabel=relabel, max_episodes=None), cfg)
     records = []
-    with open(work / "annotations.jsonl") as f:
+    with open(ann_file) as f:
         for line in f:
             r = json.loads(line)
             r["images"] = [str(Path(p).resolve().relative_to(out.resolve())) for p in r["images"]]
             records.append(r)
-    return records, {k: report[k] for k in ("funnel", "final_by_dataset", "final_by_camera", "timing")}
+    return records, {k: report.get(k, {}) for k in ("funnel", "final_by_dataset", "final_by_camera", "timing")}
 
 
 def main() -> None:
@@ -40,6 +47,7 @@ def main() -> None:
     parser.add_argument("--input", type=Path, required=True, help="root with the raw datasets (bridge/, fractal/, ...)")
     parser.add_argument("--output", type=Path, required=True, help="annotations.jsonl path, or a directory for it")
     parser.add_argument("--config", type=Path, default=Path(__file__).with_name("config.yaml"))
+    parser.add_argument("--relabel", action="store_true", help="force regeneration even if cached files exist")
     args = parser.parse_args()
     config = yaml.safe_load(args.config.read_text())
     jsonl = args.output if args.output.suffix == ".jsonl" else args.output / "annotations.jsonl"
@@ -48,10 +56,10 @@ def main() -> None:
 
     sources, stats = {}, {}
     if config.get("depth_tier1", {}).get("enabled"):
-        sources["depth_tier1"], stats["depth_tier1"] = depth_records(args.input, out, config["depth_tier1"])
+        sources["depth_tier1"], stats["depth_tier1"] = depth_records(args.input, out, config["depth_tier1"], relabel=args.relabel)
     if any(g.get("enabled") for g in config.get("generators", {}).values()):
         from aijgen.generators.run import generate
-        by_generator, stats["generators"] = generate(args.input, out, config)
+        by_generator, stats["generators"] = generate(args.input, out, config, relabel=args.relabel)
         sources.update(by_generator)
 
     seed = int(config["seed"])

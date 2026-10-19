@@ -49,8 +49,7 @@ def load_episodes(root: Path, cfg: dict) -> list[tuple[Episode, dict[str, lerobo
     for i in chosen:
         state = states[i]
         c = ph.closedness(state[:, dim], cfg["closed_high"], hi - lo)
-        ep = Episode(dataset=root.name, index=i, task=videos[cams[0]][i].task, length=len(state),
-                     fps=videos[cams[0]][i].fps, state=state, closedness=c,
-                     labels=ph.label(c) if c is not None else None)
+        ep = Episode(dataset=root.name, index=i, task=videos[cams[0]][i].task, length=len(state), state=state,
+                     closedness=c, labels=ph.label(c) if c is not None else None)
         out.append((ep, {cam: v[i] for cam, v in videos.items() if i in v}))
     return out
