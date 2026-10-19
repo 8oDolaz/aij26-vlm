@@ -15,8 +15,12 @@ same region dropped, near-ties between names marked ambiguous, boxes lying on th
 
 Arm test: every --arm-prompts / --gripper-prompts phrase is segmented on every frame (masks + boxes).
 
+Every vocabulary first drops names whose last word is in --exclude ("red object", "yellow thing", "shelf") and names
+made only of colour/size words.
+
 Writes to --out:
-  sheet_<vocab>_<page>.jpg  kept boxes (coloured, name + score), ambiguous (orange), on the arm (grey)
+  sheet_<vocab>_<page>.jpg  kept boxes (coloured, name + score), ambiguous (orange), on the arm (grey);
+                            sheet_instr_* also draws the masks of the kept boxes
   sheet_arm_<page>.jpg      arm masks (blue) and gripper masks (red) of the first prompt of each list
   records.jsonl             every frame with its names and raw answers (boxes >= 0.05), to re-tune thresholds offline
   summary.txt               per-vocabulary counts, present-vs-absent score separation, arm prompt stats, timing
@@ -74,6 +78,14 @@ SURFACES = {"table", "tabletop", "table top", "counter", "surface", "floor", "wa
 FIXTURES = {"drawer", "shelf", "fridge", "door", "cabinet", "sink", "stove", "burner", "oven", "microwave", "counter",
             "wall", "window", "table"}  # never used as negative-control names: often in view
 MAX_TASK_WORDS = 20  # longer "instructions" are mostly captions or junk ("Look at the sequence of images...")
+# Names whose last word is one of these are dropped from every vocabulary: too vague to ground ("red object",
+# "yellow thing") or fixtures that SAM 3 boxes everywhere ("shelf"). Overridable with --exclude.
+DEFAULT_EXCLUDE = ("object", "thing", "item", "stuff", "something", "anything", "piece", "shelf", "objects", "things",
+                   "items")
+# A name made only of these is no object ("purple" from "purple piece of cloth"); "orange" is left out: it is a fruit.
+COLOR_WORDS = {"red", "blue", "green", "yellow", "purple", "pink", "black", "white", "brown", "grey", "gray", "silver",
+               "gold", "golden", "small", "big", "large", "little", "dark", "light", "tiny"}
+IRREGULAR = {"knives": "knife", "shelves": "shelf", "leaves": "leaf", "loaves": "loaf"}
 
 
 def is_verb_form(word: str) -> bool:
@@ -86,6 +98,8 @@ def is_verb_form(word: str) -> bool:
 
 
 def singular(word: str) -> str:
+    if word in IRREGULAR:
+        return IRREGULAR[word]
     if len(word) > 4 and word.endswith("ies"):
         return word[:-3] + "y"
     if len(word) > 4 and re.search(r"(ches|shes|xes|sses)$", word):
@@ -95,8 +109,16 @@ def singular(word: str) -> str:
     return word
 
 
-def instruction_names(task: str, max_words: int = 4) -> list[str]:
-    """Object noun phrases of an instruction, in order, without verbs, articles, positions or surfaces."""
+def name_ok(name: str, exclude) -> bool:
+    """False for surfaces, excluded heads ("red object", "shelf") and colour/size-only names ("purple")."""
+    words = name.split()
+    return (len(name) >= 3 and name not in SURFACES and words[-1] not in exclude
+            and not all(w in COLOR_WORDS for w in words))
+
+
+def instruction_names(task: str, exclude=DEFAULT_EXCLUDE, max_words: int = 4) -> list[str]:
+    """Object noun phrases of an instruction, in order, without verbs, articles, positions, surfaces or `exclude`d
+    heads."""
     names = []
     for chunk in SPLIT.split(PIECE_OF.sub(" ", task.lower())):
         words = [w for w in re.sub(r"[^a-z0-9 ]", " ", chunk).split() if w not in DROP and not is_verb_form(w)]
@@ -104,7 +126,7 @@ def instruction_names(task: str, max_words: int = 4) -> list[str]:
             continue
         words[-1] = singular(words[-1])
         name = " ".join(words[-max_words:])
-        if len(name) >= 3 and name not in SURFACES and name not in names:
+        if name_ok(name, exclude) and name not in names:
             names.append(name)
     return names
 
@@ -124,11 +146,12 @@ def first_camera(root: Path) -> str:
     return sorted(k for k, v in feats.items() if v.get("dtype") == "video")[0]
 
 
-def pick_frames(root: Path, n_episodes: int, n_frames: int, span: tuple[float, float], rng: np.random.Generator):
+def pick_frames(root: Path, n_episodes: int, n_frames: int, span: tuple[float, float], exclude,
+                rng: np.random.Generator):
     """Distinct-instruction episodes with parseable names; n_frames evenly spread over `span` of each."""
     cam = first_camera(root)
     eps = [e for e in list_episodes(root, cam)
-           if e.length >= 10 and len(e.task.split()) <= MAX_TASK_WORDS and instruction_names(e.task)]
+           if e.length >= 10 and len(e.task.split()) <= MAX_TASK_WORDS and instruction_names(e.task, exclude)]
     by_task = {}
     for e in eps:
         by_task.setdefault(e.task, e)
@@ -144,15 +167,15 @@ def pick_frames(root: Path, n_episodes: int, n_frames: int, span: tuple[float, f
     return cam, eps, out
 
 
-def top_names(eps, n: int) -> list[str]:
-    counts = Counter(name for e in eps for name in set(instruction_names(e.task)))
+def top_names(eps, n: int, exclude) -> list[str]:
+    counts = Counter(name for e in eps for name in set(instruction_names(e.task, exclude)))
     return [name for name, _ in counts.most_common(n)]
 
 
-def negative_names(ep, pool: list[str], top: list[str], rng: np.random.Generator, k: int = 3) -> list[str]:
+def negative_names(ep, pool: list[str], top: list[str], exclude, rng: np.random.Generator, k: int = 3) -> list[str]:
     """k names from `pool` sharing no word with this episode's names or its dataset's frequent names (those are likely
     in any scene of the dataset, e.g. Bridge's burners), and no fixtures."""
-    avoid = {w for name in instruction_names(ep.task) + top for w in name.split()} | FIXTURES
+    avoid = {w for name in instruction_names(ep.task, exclude) + top for w in name.split()} | FIXTURES
     cands = [n for n in pool if not avoid & set(n.split())]
     return [cands[i] for i in sorted(rng.choice(len(cands), size=min(k, len(cands)), replace=False))]
 
@@ -192,8 +215,9 @@ class Sam3:
         return out
 
     @torch.inference_mode()
-    def query(self, vision, name: str, size: tuple[int, int], masks: bool = False) -> dict:
-        """Presence probability, boxes (xyxy pixels) and scores >= RAW_MIN_SCORE; masks (bool HxW) if asked."""
+    def query(self, vision, name: str, size: tuple[int, int], masks: bool = False, mask_min: float = 0.0) -> dict:
+        """Presence probability, boxes (xyxy pixels) and scores >= RAW_MIN_SCORE; if asked, masks (bool HxW) aligned
+        with the boxes, None for boxes scoring below mask_min (saves memory)."""
         if name not in self.text:
             self.text[name] = {k: v.to(self.device) for k, v in self.processor(text=name, return_tensors="pt").items()}
         out = self.model(vision_embeds=vision, **self.text[name])
@@ -206,7 +230,7 @@ class Sam3:
                "scores": [round(float(s), 4) for s in r["scores"].float().cpu()],
                "boxes": [[round(float(v), 1) for v in b] for b in r["boxes"].float().cpu()]}
         if masks:
-            ans["masks"] = [m.bool().cpu().numpy() for m in r["masks"]]
+            ans["masks"] = [m.bool().cpu().numpy() if s >= mask_min else None for m, s in zip(r["masks"], ans["scores"])]
         return ans
 
 
@@ -229,8 +253,9 @@ def box_on_mask(mask: np.ndarray, box) -> float:
 
 def select(answers: dict, names: list[str], arm_mask, args) -> dict:
     """Kept / ambiguous / on-arm boxes for one vocabulary, plus counts of what was dropped."""
-    cands = sorted(({"name": n, "box": b, "score": s} for n in names for b, s in
-                    zip(answers[n]["boxes"], answers[n]["scores"]) if s >= args.threshold), key=lambda c: -c["score"])
+    cands = sorted(({"name": n, "box": b, "score": s, "mask": m} for n in names for b, s, m in
+                    zip(answers[n]["boxes"], answers[n]["scores"], answers[n].get("masks") or [None] * len(answers[n]["boxes"]))
+                    if s >= args.threshold), key=lambda c: -c["score"])
     dedup = []
     for c in cands:
         if not any(d["name"] == c["name"] and iou(d["box"], c["box"]) > args.dup_iou for d in dedup):
@@ -285,6 +310,15 @@ def draw_box(img, box, text, color, thick=2):
 
 def detection_tile(rgb, rec, vocab, sel):
     img = rgb.copy()
+    kept_masks = [(c["mask"], name_color(c["name"])) for c in sel["kept"] if c["mask"] is not None]
+    if vocab == "instr" and kept_masks:  # instr names are the only ones queried with masks; drawn on their sheet only
+        tint = img.astype(np.float32)
+        for m, color in kept_masks:
+            tint[m] = 0.5 * tint[m] + 0.5 * np.array(color, np.float32)
+        img = tint.astype(np.uint8)
+        for m, color in kept_masks:
+            contours, _ = cv2.findContours(m.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            cv2.drawContours(img, contours, -1, color, 1, cv2.LINE_AA)
     for c in sel["on_arm"]:
         draw_box(img, c["box"], f"{c['name']} {c['score']:.2f} ARM", (140, 140, 140), 1)
     for c in sel["ambiguous"]:
@@ -393,6 +427,8 @@ def main():
     ap.add_argument("--vocab-file", type=Path, default=DEFAULT_VOCAB, help="word list for the 'fixed' vocabulary")
     ap.add_argument("--arm-prompts", nargs="+", default=["robot arm", "robotic arm", "black robot arm"])
     ap.add_argument("--gripper-prompts", nargs="+", default=["robot gripper", "gripper", "robot gripper fingers"])
+    ap.add_argument("--exclude", nargs="*", default=list(DEFAULT_EXCLUDE),
+                    help="drop names whose last word is one of these, from every vocabulary (pass none to keep all)")
     ap.add_argument("--threshold", type=float, default=0.4, help="min box score (confidence x presence)")
     ap.add_argument("--dup-iou", type=float, default=0.7, help="same-name boxes overlapping more are one object")
     ap.add_argument("--conflict-iou", type=float, default=0.7, help="different-name boxes overlapping more compete")
@@ -413,15 +449,16 @@ def main():
     rng = np.random.default_rng(args.seed)
     args.out.mkdir(parents=True, exist_ok=True)
 
-    fixed = load_word_list(args.vocab_file)[:3 if args.smoke else None]
+    exclude = frozenset(args.exclude)
+    fixed = [w for w in load_word_list(args.vocab_file) if name_ok(w, exclude)][:3 if args.smoke else None]
     found = {}  # dataset -> (camera, usable episodes, frames, top names)
     for ds in args.datasets:
         root = args.input / ds
         if not (root / "meta" / "info.json").is_file():
             print(f"skip {ds}: no {root}/meta/info.json")
             continue
-        cam, eps, frames = pick_frames(root, args.episodes, args.frames, tuple(args.span), rng)
-        found[ds] = (cam, eps, frames, top_names(eps, args.top_n))
+        cam, eps, frames = pick_frames(root, args.episodes, args.frames, tuple(args.span), exclude, rng)
+        found[ds] = (cam, eps, frames, top_names(eps, args.top_n, exclude))
         print(f"{ds}: {len(frames)} frames from {len({f[0].index for f in frames})} episodes ({cam}); "
               f"top-{args.top_n}: {', '.join(found[ds][3])}")
 
@@ -429,12 +466,12 @@ def main():
     for ds, (cam, eps, frames, top) in found.items():
         # Negative control from the other datasets' common names (Fractal's cans are not in Bridge's toy kitchens);
         # with one dataset only, from this dataset's rarer names, which are less surely absent.
-        others = [n for o, f in found.items() if o != ds for n in top_names(f[1], 60)]
-        pool = others or top_names(eps, 300)[args.top_n:]
+        others = [n for o, f in found.items() if o != ds for n in top_names(f[1], 60, exclude)]
+        pool = others or top_names(eps, 300, exclude)[args.top_n:]
         for ep, fi, rgb in frames:
-            instr = instruction_names(ep.task)
+            instr = instruction_names(ep.task, exclude)
             names = {"instr": instr, "instr+top": list(dict.fromkeys(instr + top)), "fixed": fixed,
-                     "neg": negative_names(ep, pool, top, rng)}
+                     "neg": negative_names(ep, pool, top, exclude, rng)}
             jobs.append((ds, cam, ep, fi, rgb, names))
     if not jobs:
         sys.exit("no frames found")
@@ -457,7 +494,7 @@ def main():
             arm, arm_mask = {}, np.zeros((h, w), bool)
             for p in args.arm_prompts + args.gripper_prompts:
                 t = time.perf_counter()
-                arm[p] = sam.query(vision, p, (h, w), masks=True)
+                arm[p] = sam.query(vision, p, (h, w), masks=True, mask_min=args.threshold)
                 timing["query"].append(time.perf_counter() - t)
                 good = [m for m, s in zip(arm[p]["masks"], arm[p]["scores"]) if s >= args.threshold]
                 union = np.any(good, axis=0) if good else np.zeros((h, w), bool)
@@ -473,12 +510,12 @@ def main():
             answers = {}
             for nm in queries:
                 t = time.perf_counter()
-                answers[nm] = sam.query(vision, nm, (h, w))
+                answers[nm] = sam.query(vision, nm, (h, w), masks=nm in names["instr"], mask_min=args.threshold)
                 timing["query"].append(time.perf_counter() - t)
             timing["n_queries"].append(len(queries) + len(arm))
 
             rec = {"dataset": ds, "camera": cam, "episode": ep.index, "frame": fi, "task": ep.task, "names": names,
-                   "answers": answers,
+                   "answers": {n: {k: v for k, v in a.items() if k != "masks"} for n, a in answers.items()},
                    "arm": {p: {k: v for k, v in a.items() if k != "masks"} | {"mask_area_pct": round(
                        100.0 * float(np.any([m for m, s in zip(a["masks"], a["scores"]) if s >= args.threshold],
                                             axis=0).mean()) if any(s >= args.threshold for s in a["scores"]) else 0.0, 2)}
