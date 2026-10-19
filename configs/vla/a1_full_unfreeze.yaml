@@ -48,7 +48,7 @@ optimizer:
 
 training:
   job_name: smolvla-libero-a1-full-unfreeze
-  steps: 30000                       # x batch 4 x 2 GPUs = 240k samples, ~0.9 epoch of LIBERO
+  steps: 200000                       # x batch 4 x 2 GPUs = 240k samples, ~0.9 epoch of LIBERO
   batch_size: 4                      # per GPU
   num_workers: 16
   seed: 1000

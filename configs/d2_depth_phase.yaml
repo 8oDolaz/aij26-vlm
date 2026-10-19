@@ -14,7 +14,7 @@ vlm:
 
 vla:
   suite: libero
-  dataset_dir: /repo/vendor/participant/examples/smoke/libero_mini    # HuggingFaceVLA/libero @ v3.0; kit default vla_libero.yaml
+  dataset_dir: /data/vla     # HuggingFaceVLA/libero @ v3.0; kit default vla_libero.yaml
 
 runtime:
   gpu_indices: [0]
