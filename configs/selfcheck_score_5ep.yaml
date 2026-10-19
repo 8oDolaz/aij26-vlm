@@ -1,0 +1,27 @@
+# Participant Score self-check (8 VLM benches + libero_spatial), as vendor/participant/configs/
+# selfcheck_score.example.yaml but with 5 LIBERO episodes per task: 1 per task (10 in all) moves the VLA share by
+# +-10pp per episode. Relative paths resolve against the kit root (/workspace in the dev container).
+#   cd /workspace && ./scripts/run_score_selfcheck.sh --submission /repo/runs/<run>/submission \
+#     --config /repo/configs/selfcheck_score_5ep.yaml [--skip-vlm]
+
+paths:
+  lmms_eval: third_party/lmms-eval
+  lmms_python: third_party/lmms-eval/.venv/bin/python
+  erqa_data_dir: data/erqa_converted
+
+runtime:
+  gpu_indices: [0]
+  output_root: null                  # <submission>/../score_selfcheck
+
+vlm:
+  suite: configs/greenvla_vlm_tasks.yaml
+  model: smolvlm2
+  batch_size: 1
+  limit: null
+  exclude_erqa: false
+
+vla:
+  suite: libero_spatial
+  task_ids: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+  episodes_per_task: 5
+  seed: 1000

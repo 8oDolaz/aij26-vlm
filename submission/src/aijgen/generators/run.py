@@ -16,11 +16,18 @@ from aijgen.generators import build_generators
 from aijgen.generators.episodes import load_episodes
 
 
+def source(q) -> str:
+    """Record group of a question: the generator name, or "<generator>/<template>" when the question names its
+    template (scene_qa), so the mix in config.yaml can cap each template on its own."""
+    return f"{q.kind}/{q.meta['template']}" if "template" in q.meta else q.kind
+
+
 def generate(input_root: Path, out: Path, config: dict, relabel: bool = False) -> tuple[dict[str, list[dict]], dict]:
-    """({generator name: ShareGPT records}, stats). Image paths are relative to `out`."""
+    """({source: ShareGPT records}, stats), source as in `source`. Image paths are relative to `out`."""
     generators = build_generators(config, work_root=out)
+    names = {g.name for g in generators}
     ecfg = config["episodes"]
-    records, stats = {g.name: [] for g in generators}, Counter()
+    records, stats = {}, Counter()
     if not generators:
         return records, {}
 
@@ -37,8 +44,8 @@ def generate(input_root: Path, out: Path, config: dict, relabel: bool = False) -
                 ep_idx = entry.get("episode")
                 processed_episodes.add((ds, ep_idx))
                 for kind, recs in entry.get("records", {}).items():
-                    if kind in records:
-                        records[kind].extend(recs)
+                    if kind.split("/")[0] in names:
+                        records.setdefault(kind, []).extend(recs)
                         stats[f"{ds} {kind} records"] += len(recs)
                         for r in recs:
                             ans = r.get("messages", [{}, {}])[1].get("content")
@@ -65,7 +72,7 @@ def generate(input_root: Path, out: Path, config: dict, relabel: bool = False) -
 
             questions = [q for g in generators for q in g(ep, videos=videos)]
             stats[f"{ds_name} episodes {'with' if questions else 'without'} questions"] += 1
-            ep_records = {g.name: [] for g in generators}
+            ep_records = {}
             if questions:
                 wanted = sorted({f for q in questions for f in q.frames})
                 frames = {cam: lerobot.read_frames(v, wanted) for cam, v in videos.items()}
@@ -93,8 +100,8 @@ def generate(input_root: Path, out: Path, config: dict, relabel: bool = False) -
                             "messages": [{"role": "user", "content": "<image>\n" * len(paths) + q.question},
                                          {"role": "assistant", "content": q.answer}],
                             "images": paths}
-                        records[q.kind].append(rec)
-                        ep_records[q.kind].append(rec)
+                        records.setdefault(source(q), []).append(rec)
+                        ep_records.setdefault(source(q), []).append(rec)
                         stats[f"{ds_name} {q.kind} records"] += 1
                         stats[f"{q.kind} answer {q.answer}"] += 1
                         for k, v in q.meta.items():

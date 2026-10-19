@@ -56,7 +56,7 @@ generators:
       close_embspatial: {per_frame: 1, n_options: 4, margin: 0.10}
       far_embspatial: {per_frame: 1, n_options: 4, margin: 0.10}
       pointing_erqa: {per_frame: 1, p_letters: 0.3, min_dot_dist: 0.08, erode_frac: 0.015}
-      localization_blink: {per_frame: 1, iou: [0.3, 0.65], min_area: 0.003}
+      localization_blink: {per_frame: 1, iou: [0.15, 0.45], max_shift: 0.8, min_area: 0.003}  # wrong box: IoU with the real one
       existence_msmu: {per_frame: 1, p_present: 0.3}
       counting_blink: {per_frame: 1}
       counting_msmu: {per_frame: 1}

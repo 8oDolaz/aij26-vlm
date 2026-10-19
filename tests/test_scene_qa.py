@@ -252,7 +252,7 @@ class TestTemplates(unittest.TestCase):
                 target = next(o for o in sc.subjects if f"encloses the {o.name}?" in it.question)
                 self.assertEqual(boxes[it.answer], target.box)
                 other = boxes["B" if it.answer == "A" else "A"]
-                self.assertTrue(0.3 <= D.overlaps(other, target.box)[0] <= 0.65)
+                self.assertTrue(0.15 <= D.overlaps(other, target.box)[0] <= 0.45)
 
     def test_existence_and_counting(self):
         sc = scene(TIDY + [raw("pot", (200, 250, 300, 350)), raw("pot", (350, 250, 450, 350))], negatives=["piano"])

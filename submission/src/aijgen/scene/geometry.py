@@ -78,13 +78,14 @@ def sample_background(size: tuple[int, int], blocked: list, rng: np.random.Gener
 
 
 def perturbed_box(box, size: tuple[int, int], rng: np.random.Generator, iou_range: tuple[float, float],
-                  tries: int = 100):
+                  max_shift: float = 0.8, tries: int = 200):
     """A box overlapping `box` with IoU inside iou_range (BLINK Object Localization's noisy box): each side moved by up
-    to half the box size, kept inside the image and at least 8 px on each side. None if no try lands in the range."""
+    to max_shift of the box size, kept inside the image and at least 8 px on each side. None if no try lands in the
+    range."""
     h, w = size
     bw, bh = box[2] - box[0], box[3] - box[1]
     for _ in range(tries):
-        d = rng.uniform(-0.5, 0.5, 4) * np.array([bw, bh, bw, bh])
+        d = rng.uniform(-max_shift, max_shift, 4) * np.array([bw, bh, bw, bh])
         x0, y0, x1, y1 = (float(np.clip(v, 0, lim)) for v, lim in
                           zip(np.array(box, float) + d, (w - 1, h - 1, w - 1, h - 1)))
         if x1 - x0 < 8 or y1 - y0 < 8:

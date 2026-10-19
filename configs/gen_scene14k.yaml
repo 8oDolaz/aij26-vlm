@@ -1,0 +1,96 @@
+# ~13.7k SAM 3 scene questions (docs/sam3_vqa_plan.md, aijgen.scene) with a per-template split, for the VLM SFT mix.
+# depth_tier1 and phase_qa are off here; the planned full mix is this + ~3k depth_tier1 + ~3k ERQA-style episode
+# questions (docs/vlm_data_priorities.md #4) once those exist.
+#
+# Split: by roughly the square root of each subtask's weight in the 8-bench VLM average, adjusted for label
+# reliability (strict counts are mostly burners and drawers) and EmbSpatial "far" being below chance in every run.
+# Letters: 9,200 four-option and 800 two-option questions -> A, B 27.0%, C, D 23.0% of the letter answers;
+# letter_balance trims the two-option templates if four-option ones fall short of their caps.
+#
+# Caps are maxima: a template that finds fewer frames it can use shows "short_of_cap" in annotations.stats.json.
+# Source frames: up to 1500 episodes per dataset x 2 frames; roughly 1-1.5 h of SAM 3 + DA3 on the 5090.
+# Detections are cached in <output dir>/scene_qa/cache/: re-running with --relabel loads no model.
+#
+# On the GPU box, from the repo root in the dev container (da3_src is relative to it; facebook/sam3 is gated):
+#   python submission/generate_dataset.py --input /data/raw --output /data/gen/scene14k/annotations.jsonl \
+#     --config configs/gen_scene14k.yaml
+seed: 0
+
+mix:
+  scene_qa:                  # per template; templates left out are kept whole
+    relation_embspatial: 4000  # EmbSpatial left/right/above/under, 4 options
+    far_embspatial: 1700       # 4 options
+    close_embspatial: 1400     # 4 options
+    pointing_erqa: 1400        # ERQA, 4 options
+    counting_blink: 700        # BLINK, 4 options
+    relation_msmu: 1900        # free-form
+    existence_msmu: 1000       # free-form
+    counting_msmu: 800         # free-form
+    relation_blink: 450        # yes/no, 2 options
+    localization_blink: 350    # box A/B, 2 options
+
+letter_balance:              # generate_dataset.balance_letters
+  max_share: 0.27            # no answer letter above this share of the bare-letter answers
+  min_keep: 0.5              # never drop more than half of a two-option template
+
+generators:
+  scene_qa:
+    enabled: true
+    seed: 42
+    sam3_model: facebook/sam3              # gated HF id
+    depth_model: depth-anything/DA3-BASE   # Apache-2.0; all views of a moment go into one call
+    da3_src: example/depth-anything-3/src  # depth_anything_3 package
+    da3_process_res: 504
+    frames_span: [0.05, 0.35]              # early in the episode: objects not yet moved
+    frames_per_episode: 2
+    min_length: 10
+    min_frame_std: 8.0                     # flatter views are blank cameras
+    datasets:                              # question views rotate over the non-blank ones
+      bridge:
+        views: [observation.images.image_0, observation.images.image_1, observation.images.image_2]
+      fractal:
+        views: [observation.images.image]
+    detection:                             # changing these recomputes cached frames
+      mask_min: 0.5
+      negatives_per_frame: 8
+      depth_erode_frac: 0.01
+    filter:                                # aijgen.scene.detect.FilterParams
+      threshold: 0.85
+      max_area: 0.4
+      dup_iou: 0.7
+      contain: 0.85
+      conflict_iou: 0.7
+      margin: 0.15
+      uncertain: 0.3
+    scene:
+      exclude_subjects: [stove, stovetop, cooktop, basin]
+      absent_presence: 0.05
+      max_count: 6
+    templates:                             # per_frame = max questions per source frame
+      relation_embspatial: {per_frame: 2, gap_frac: 0.02}   # 2: its cap is the largest
+      relation_blink: {per_frame: 1, gap_frac: 0.02}
+      relation_msmu: {per_frame: 1, gap_frac: 0.02}
+      close_embspatial: {per_frame: 1, n_options: 4, margin: 0.10}
+      far_embspatial: {per_frame: 1, n_options: 4, margin: 0.10}
+      pointing_erqa: {per_frame: 1, p_letters: 0.3, min_dot_dist: 0.08, erode_frac: 0.015}
+      localization_blink: {per_frame: 1, iou: [0.15, 0.45], max_shift: 0.8, min_area: 0.003}
+      existence_msmu: {per_frame: 1, p_present: 0.3}
+      counting_blink: {per_frame: 1}
+      counting_msmu: {per_frame: 1}
+
+# Datasets the per-episode generators read (aijgen.generators.episodes), evenly spread over the episodes on disk
+episodes:
+  min_frame_std: 8.0
+  datasets:
+    bridge:
+      cameras: [observation.images.image_0, observation.images.image_1, observation.images.image_2]
+      gripper_dim: 6
+      closed_high: false
+      min_length: 10
+      max_episodes: 1500
+    fractal:
+      cameras: [observation.images.image]
+      gripper_dim: 7
+      closed_high: true
+      min_length: 10
+      max_episodes: 1500

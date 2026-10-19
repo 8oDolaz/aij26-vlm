@@ -1,0 +1,28 @@
+# d4 LoRA: VLA only, on the d4 SFT'd VLM, with the VLM updated partially (LoRA on its text layers, expert in full;
+# configs/vla/a3_lora_vlm.yaml). The kit has no PEFT option, so lerobot-train is swapped for tools/vla_peft_shim and
+# the exported action_expert is merged back to a plain policy afterwards. In the dev container:
+#   ln -sf /repo/configs/vla/a3_lora_vlm.yaml /workspace/configs/vla_libero.yaml
+#   cd /workspace && PATH=/repo/tools/vla_peft_shim:$PATH VLA_PEFT_CONFIG=/repo/configs/vla/a3_lora_vlm.yaml \
+#     PYTORCH_ALLOC_CONF=expandable_segments:True ./scripts/run_pipeline.sh /repo/configs/d4_scene_mix_lora.yaml \
+#       --vlm-checkpoint /repo/runs/d4_scene_mix/vlm/checkpoints
+#   python /repo/tools/merge_vla_lora.py /repo/runs/d4_scene_mix_lora/submission/action_expert \
+#     --keep-adapter /repo/runs/d4_scene_mix_lora/action_expert_adapter \
+#     --reference /repo/runs/d4_scene_mix/submission/action_expert
+run_name: d4_scene_mix_lora
+
+vlm:
+  protocol: full
+  # Not trained (--vlm-checkpoint), but run_pipeline.py still requires an existing ShareGPT file here.
+  data_path: /data/gen/d4_mix/annotations.jsonl
+  eval_data_path: null
+  media_dir: /data/gen
+
+vla:
+  suite: libero
+  dataset_dir: /data/vla
+
+runtime:
+  gpu_indices: [0]
+  output_root: /repo/runs
+  cache_dir: /repo/runs/cache/core
+  lerobot_home: /repo/runs/cache/lerobot

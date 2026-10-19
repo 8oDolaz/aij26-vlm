@@ -315,7 +315,7 @@ def localization_blink(scene, rng, cfg):
                if (s.box[2] - s.box[0]) * (s.box[3] - s.box[1]) >= cfg.get("min_area", 0.003) * h * w]
     for i in rng.permutation(len(targets))[:cfg.get("per_frame", 1)]:
         t = targets[i]
-        fake = perturbed_box(t.box, (h, w), rng, tuple(cfg.get("iou", (0.3, 0.65))))
+        fake = perturbed_box(t.box, (h, w), rng, tuple(cfg.get("iou", (0.15, 0.45))), cfg.get("max_shift", 0.8))
         if fake is None:
             continue
         correct = "A" if rng.random() < 0.5 else "B"

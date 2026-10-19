@@ -6,7 +6,12 @@ seed: 0
 mix:
   depth_tier1: 2000
   phase_qa: 3000
-  scene_qa: null             # keep every scene question generated
+  scene_qa: null             # keep every scene question generated; a {template: cap} mapping caps per template
+                             # (configs/gen_scene14k.yaml)
+
+letter_balance:              # trim two-option sources so no answer letter goes over max_share (docs #0)
+  max_share: 0.27
+  min_keep: 0.5              # never drop more than half of a two-option source
 
 # Relative-depth Tier 1: BLINK-style point pairs (docs/relative_depth_plan.md, section 5).
 # Gap thresholds are in per-frame normalised disparity (p2..p98 -> 0..1), calibrated on NYU-v2 (section 2.2) with
@@ -115,7 +120,7 @@ generators:
       close_embspatial: {per_frame: 1, n_options: 4, margin: 0.10}   # margin in normalised disparity
       far_embspatial: {per_frame: 1, n_options: 4, margin: 0.10}
       pointing_erqa: {per_frame: 1, p_letters: 0.3, min_dot_dist: 0.08, erode_frac: 0.015}
-      localization_blink: {per_frame: 1, iou: [0.3, 0.65], min_area: 0.003}
+      localization_blink: {per_frame: 1, iou: [0.15, 0.45], max_shift: 0.8, min_area: 0.003}  # wrong box: IoU with the real one
       existence_msmu: {per_frame: 1, p_present: 0.3}
       counting_blink: {per_frame: 1}
       counting_msmu: {per_frame: 1}

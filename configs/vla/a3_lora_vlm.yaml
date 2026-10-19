@@ -1,0 +1,59 @@
+# a3: SmolVLA on full LIBERO v3.0 with the VLM updated partially: LoRA adapters on the VLM text layers, the action
+# expert and its projections trained in full, the vision encoder and connector frozen.
+# Same as a1_full_unfreeze.yaml except the policy freezing, the LR and the `peft` section. The kit passes no `peft`
+# to lerobot, so the run goes through tools/vla_peft_shim (see configs/d4_scene_mix_lora.yaml for the command), and
+# the exported action_expert is merged back to a plain policy with tools/merge_vla_lora.py.
+#
+# lerobot 0.5.1 PEFT: only r is exposed (lora_alpha stays at peft's default 8, scale alpha/r = 0.5); one LR for the
+# adapters and the fully trained expert; target_modules is a regex over module names, full_training_modules matches
+# module name suffixes (PEFT modules_to_save).
+
+dataset:
+  repo_id: HuggingFaceVLA/libero
+  revision: v3.0
+  episode_count: 1693
+  subset_seed: 1000
+  use_imagenet_stats: true
+  video_backend: pyav
+
+policy:
+  load_vlm_weights: true
+  train_expert_only: false
+  freeze_vision_encoder: true        # PEFT freezes everything but the adapters and full_training_modules anyway
+  train_state_proj: true
+  chunk_size: 50
+  n_action_steps: 50
+  num_vlm_layers: -1
+  num_expert_layers: -1
+  expert_width_multiplier: 0.75
+  attention_mode: cross_attn
+  self_attn_every_n_layers: 2
+  device: cuda
+
+peft:                                # read by tools/vla_peft_shim (lerobot PeftConfig fields)
+  method_type: LORA
+  r: 16
+  # attention and MLP projections of the VLM text layers (the expert's layers are not under text_model)
+  target_modules: '.*text_model.*layers\.\d+\.(self_attn\.(q|k|v|o)_proj|mlp\.(gate|up|down)_proj)'
+  full_training_modules: [lm_expert, state_proj, action_in_proj, action_out_proj, action_time_mlp_in, action_time_mlp_out]
+
+optimizer:
+  learning_rate: 0.0001              # kit value for a frozen VLM + from-scratch expert; LoRA adapters share it
+  betas: [0.9, 0.95]
+  epsilon: 0.00000001
+  weight_decay: 0.0000000001
+  grad_clip_norm: 10.0
+  warmup_steps: 1000
+  decay_steps: 30000
+  decay_learning_rate: 0.0000025
+
+training:
+  job_name: smolvla-libero-a3-lora-vlm
+  steps: 100000                      # half of a1; compare with a1's 100k checkpoint (save_freq 50000 keeps it)
+  batch_size: 4
+  num_workers: 16
+  seed: 1000
+  log_freq: 10
+  save_freq: 50000                   # 2 checkpoints (disk: a1 at 5000 wrote 40 x 3.8 GB)
+  resume: false
+  resume_config_path: null
