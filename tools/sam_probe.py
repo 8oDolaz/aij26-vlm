@@ -33,13 +33,10 @@ from aijgen.objects.scene_vocabulary import (
     parse_task_objects,
 )
 from aijgen.objects.processing import (
-    annotate_robot_arm_segments,
-    compute_robot_arm_mask,
     compute_spatial_relations,
     create_sam_comparison,
     draw_sam_segmentation,
     extract_segments,
-    filter_robot_arm_segments,
 )
 
 
@@ -276,23 +273,14 @@ def main():
     parser.add_argument("--out", type=Path, default=REPO / "runs" / "sam_probe", help="Output directory")
     parser.add_argument("--model", default="facebook/sam2.1-hiera-small", help="SAM 2.1 model identifier")
     parser.add_argument("--min-area", type=int, default=50, help="Minimum mask area in pixels to report")
-    parser.add_argument("--max-area-pct", type=float, default=35.0, help="Maximum segment area percent for object grounding (default: 35.0% to reject background/table)")
+    parser.add_argument("--max-area-pct", type=float, default=35.0, help="Maximum segment area percent for object grounding (default: 35.0%% to reject background/table)")
     parser.add_argument("--no-boxes", action="store_true", help="Do not draw bounding box outlines")
     parser.add_argument("--no-labels", action="store_true", help="Do not draw segment ID tags")
     parser.add_argument("--show-all-labels", action="store_true", help="Draw background segment IDs even when semantic objects are present")
     parser.add_argument("--alpha", type=float, default=0.45, help="Alpha blending transparency for masks")
     parser.add_argument("--no-distractors", action="store_true", help="Disable negative prompt distractor classes (background / robot arm suppression)")
-    parser.add_argument(
-        "--arm-mode",
-        choices=["parts", "arm", "gripper", "suppress", "none"],
-        default="suppress",
-        help="Robot arm annotation mode: 'suppress' (default: hide/clear robot arm completely), 'none' (leave raw), or 'parts'/'gripper'/'arm'",
-    )
-    parser.add_argument("--no-arm-mask", action="store_true", help="Alias to completely disable arm processing (--arm-mode none)")
     parser.add_argument("--no-ground", action="store_true", help="Disable zero-shot semantic grounding to task candidates")
     args = parser.parse_args()
-
-    arm_mode = "none" if args.no_arm_mask else args.arm_mode
 
     args.out.mkdir(parents=True, exist_ok=True)
     task_desc = ""
@@ -354,7 +342,6 @@ def main():
             args.clip_model,
             bg_alpha=args.bg_alpha,
             max_area_pct=args.max_area_pct,
-            arm_mode=arm_mode,
         )
         print(f"Crop classifier loaded in {time.time() - t0:.2f} s")
 
@@ -380,6 +367,7 @@ def main():
         tracker = TemporalObjectTracker(max_missed=2)
 
         for step, (frame_idx, t_sec, f_rgb) in enumerate(frames_seq):
+            t_f0 = time.time()
             labels = segmenter(f_rgb)
             segments = extract_segments(labels, min_area_px=args.min_area)
 
@@ -393,12 +381,6 @@ def main():
                     include_distractors=not args.no_distractors,
                 )
                 segments = tracker.update(segments)
-
-            if arm_mode != "none":
-                arm_mask = compute_robot_arm_mask(f_rgb)
-                segments, labels = annotate_robot_arm_segments(
-                    segments, labels, arm_mask, mode=arm_mode
-                )
 
             grounded_items = [
                 s for s in segments
@@ -488,12 +470,6 @@ def main():
             include_distractors=not args.no_distractors,
         )
 
-    if arm_mode != "none":
-        arm_mask = compute_robot_arm_mask(frame)
-        segments, labels = annotate_robot_arm_segments(
-            segments, labels, arm_mask, mode=arm_mode
-        )
-
     grounded_items = [
         s for s in segments
         if "label" in s and not str(s["label"]).startswith("#")
@@ -501,8 +477,7 @@ def main():
     print(f"\nDiscovered {len(grounded_items)} objects on image (threshold={args.threshold}):")
     for s in grounded_items:
         fb = " [fallback box]" if s.get("is_fallback") else ""
-        arm_tag = " [robot part]" if s.get("is_robot_arm") else ""
-        print(f"  * '{s['label']}' (score {s.get('score', 0):.2f}) -> Segment #{s['seg_id']}  box={s['box']}{fb}{arm_tag}")
+        print(f"  * '{s['label']}' (score {s.get('score', 0):.2f}) -> Segment #{s['seg_id']}  box={s['box']}{fb}")
 
     relations = compute_spatial_relations(segments, (h, w))
     rel_str = " | ".join(relations) if relations else ""
