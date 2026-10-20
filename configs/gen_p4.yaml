@@ -1,0 +1,161 @@
+# P4 of docs/sam3_vqa_plan.md only: object-level cross-view matching (scene_qa crossview) and ERQA task success with
+# hard negatives (task_success). ~3,000 records, the same share as d4's 3,000 depth records next to its ~10.7k scene
+# questions, and the "~3k ERQA-style episode questions" slot of configs/gen_scene14k.yaml.
+#
+# Split: by roughly the square root of each subtask's weight in the 8-bench VLM average, anchored at pointing_erqa =
+# 1,400 for 34 ERQA questions (gen_scene14k), then cut for label reliability: CrossPoint Correspondence-Judgement
+# (156 questions) -> 1,100, ERQA Multi-view (37, many point-level) -> 900, ERQA task success (~11) -> 1,000.
+# Caps are maxima: a template that finds fewer usable frames shows "short_of_cap" in annotations.stats.json.
+#
+# Letters: on its own this set leans to A/B (2- and 3-option questions), so letter_balance is off here. Balance it
+# when merging into a training mix:
+#   python tools/build_sft_mix.py --scene /data/gen/scene14k/annotations.jsonl \
+#     --old /data/gen/d2_depth_phase/annotations.jsonl --extra /data/gen/p4/annotations.jsonl ... --out <mix>
+#
+# Conservative labels (the reasons are in the module docstrings):
+#   - cross-view: Bridge only, frames before the first grasp; the object is the only one of its kind in both views
+#     and not ambiguous in the third; distractors never overlap it (aijgen.scene.crossview);
+#   - task success: only clean episodes (one grasp, carried, released / lifted, normal length, no full close), a done
+#     frame from the last 5% where the outcome is visible, and SAM 3 must see the result; the No is a swapped object
+#     that never moved (p_swap) or the real task on an early pre-grasp frame (aijgen.generators.task_success).
+#
+# Cost on the 5090: SAM 3 only (no DA3). Cross-view ~2 h (≈1.9k multi-view Bridge episodes x 3 frames x 3 views);
+# task success ~0.5 h (≈3k clean episodes x 2 frames). Detections are cached in <output dir>/<generator>/cache/, so
+# re-running with --relabel after changing thresholds loads no model. Skip reasons: "task_success skip <reason>" in
+# annotations.stats.json.
+#
+# On the GPU box, from the repo root in the dev container (facebook/sam3 is gated):
+#   python submission/generate_dataset.py --input /data/raw --output /data/gen/p4/annotations.jsonl \
+#     --config configs/gen_p4.yaml
+# Hand check first (contact sheets per template, >= 95% correct on ~50 each):
+#   python tools/scene_qa_sheet.py --input /data/raw --out runs/p4_check --config configs/gen_p4.yaml --episodes 60
+seed: 0
+
+mix:
+  scene_qa:
+    crossview_crosspoint: 1100   # CrossPoint judgement, 3 options
+    crossview_erqa: 900          # ERQA multi-view circles, 4 options
+  task_success:
+    success_erqa: 1000           # ERQA yes/no, Yes and No 50/50
+
+letter_balance: null
+
+generators:
+  scene_qa:
+    enabled: true
+    seed: 42
+    sam3_model: facebook/sam3              # gated HF id
+    depth_model: null                      # cross-view needs no depth; frames cached with depth are reused as well
+    frames_span: [0.05, 0.35]              # early in the episode: objects not yet moved
+    frames_per_episode: 3
+    min_length: 10
+    min_frame_std: 8.0                     # flatter views are blank cameras
+    datasets:                              # Bridge only: Fractal has one camera
+      bridge:
+        views: [observation.images.image_0, observation.images.image_1, observation.images.image_2]
+    detection:                             # as gen_scene14k, so its cached frames are reused
+      mask_min: 0.5
+      negatives_per_frame: 8
+      depth_erode_frac: 0.01
+    filter:                                # aijgen.scene.detect.FilterParams
+      threshold: 0.85
+      max_area: 0.4
+      dup_iou: 0.7
+      contain: 0.85
+      conflict_iou: 0.7
+      margin: 0.15
+      uncertain: 0.3
+    scene:
+      exclude_subjects: [stove, stovetop, cooktop, basin]
+      absent_presence: 0.05
+      max_count: 6
+    templates: {}                          # no single-view questions in this set
+    crossview:                             # aijgen.scene.crossview
+      pre_grasp_only: true                 # only frames of the first pre_grasp run (nothing in the gripper)
+      check_third_view: true               # the other non-blank view may veto a name (one more SAM 3 call)
+      templates:
+        crossview_crosspoint:
+          per_frame: 1
+          max_target_frac: 0.15            # box diagonal / width, both views: small objects only (point-level bench)
+          min_dot_dist: 0.08               # fraction of the width
+          border: 0.05
+          distractor_iou: 0.1              # a distractor box overlapping the target more is dropped
+          distractor_contain: 0.3
+        crossview_erqa:
+          per_frame: 1
+          min_dot_dist: 0.08
+          border: 0.05
+          distractor_iou: 0.1
+          distractor_contain: 0.3
+
+  task_success:
+    enabled: true
+    seed: 42
+    sam3_model: facebook/sam3
+    depth_model: null
+    min_frame_std: 8.0
+    datasets:
+      bridge:
+        views: [observation.images.image_0, observation.images.image_1, observation.images.image_2]
+        fps: 5
+        max_length: 50                     # ~p95 of episode length: longer ones are often struggles
+        gripper_dim: 6
+        closed_high: false
+        full_close_raw: 0.07               # median raw gripper in contact at or below this: closed on nothing
+        sample_fraction: 1.0
+      fractal:
+        views: [observation.images.image]
+        fps: 3
+        max_length: 79                     # ~p95; Fractal's gripper reads 1.0 whenever closed, so no full-close check
+        sample_fraction: 1.0
+    detection:
+      mask_min: 0.5
+      negatives_per_frame: 8
+      depth_erode_frac: 0.01
+    filter:
+      threshold: 0.85
+      max_area: 0.4
+      dup_iou: 0.7
+      contain: 0.85
+      conflict_iou: 0.7
+      margin: 0.15
+      uncertain: 0.3
+    scene:
+      exclude_subjects: [stove, stovetop, cooktop, basin]
+      absent_presence: 0.05
+      max_count: 6
+    clean:                                 # proprio filter: any sign of a failed attempt drops the episode
+      min_contact_s: 1.0
+      min_carry: 0.05                      # m, arm travel while holding
+      min_descent: 0.02                    # m, arm lower at the grasp than at the start
+      min_post_release_s: 0.6              # place: time after the release before the episode ends
+      min_lift: 0.05                       # pick: last frame this much above the grasp height (m)
+    frames:
+      done_window: 0.05                    # done frame: random in the last 5% of the episode ...
+      min_done_frames: 2                   # ... at least the last 2 frames
+      release_min_distance: 0.05           # place: arm this far (m) from where it let go, gripper open
+    checks:                                # SAM 3 on the done and the early frame (same view)
+      on_target: 0.5                       # Yes: share of X's box inside Y's box at the end
+      start_on_target: 0.2                 # ... and below this at the start
+      min_lift_px: 0.03                    # pick: X's box bottom this much higher (fraction of height) than at the start
+      swap_min_iou: 0.6                    # W's early and done boxes: it never moved
+      swap_max_on_target: 0.1              # W is not on Y
+    p_swap: 0.7                            # No = swapped object on the done frame; else the real task on an early frame
+
+# Datasets the per-episode generators read (aijgen.generators.episodes): every episode on disk; the generators filter
+# cheaply (views, phases, instruction, proprio) before any SAM 3 call.
+episodes:
+  min_frame_std: 8.0
+  datasets:
+    bridge:
+      cameras: [observation.images.image_0, observation.images.image_1, observation.images.image_2]
+      gripper_dim: 6
+      closed_high: false
+      min_length: 10
+      max_episodes: null
+    fractal:
+      cameras: [observation.images.image]
+      gripper_dim: 7
+      closed_high: true
+      min_length: 10
+      max_episodes: null

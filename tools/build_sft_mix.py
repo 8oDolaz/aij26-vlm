@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Build a self-contained VLM SFT mix from generated datasets: every record of --scene plus samples of the depth_tier1
-and phase_qa records of --old (a generate_dataset.py output where depth images are under depth_tier1/).
+and phase_qa records of --old (a generate_dataset.py output where depth images are under depth_tier1/), plus every
+record of each --extra set (e.g. the P4 questions of configs/gen_p4.yaml).
 
 The images the mix uses are copied next to it, to <out dir>/images/<source dir name>/<path in the source>, and the
 records point there (paths relative to the out dir, which is the media_dir for training). The out dir can then be
@@ -13,7 +14,7 @@ two-option records are dropped in random order (so their own A/B balance holds),
 Run in the dev container:
   python tools/build_sft_mix.py --scene /data/gen/scene14k/annotations.jsonl \
       --old /data/gen/d2_depth_phase/annotations.jsonl --depth 3000 --phase 1000 \
-      --out /data/gen/d4_mix/annotations.jsonl
+      [--extra /data/gen/p4/annotations.jsonl] --out /data/gen/d4_mix/annotations.jsonl
 Writes the JSONL, <out dir>/images/ and <out>.stats.json (counts per source, drops, letter shares, images copied).
 """
 import argparse
@@ -25,7 +26,9 @@ from pathlib import Path
 
 import numpy as np
 
-OPTION = re.compile(r"^\(?([A-J])[).] ", re.M)
+OPTION = re.compile(r"^\(?([A-J])[).] ", re.M)  # one option per line (BLINK, EmbSpatial); CrossPoint's first one
+SPACED = re.compile(r"  ([A-J])\. ")              # CrossPoint "A. Green dot  B. Blue dot  C. Yellow dot"
+INLINE = re.compile(r"(?:^|\s)([A-J])\. ")        # ERQA "Choices: A. No. B. Yes." (after "Choices:")
 
 
 def load(path: Path) -> list[dict]:
@@ -49,7 +52,10 @@ def letter(r: dict) -> str | None:
 
 
 def n_options(r: dict) -> int:
-    return len(set(OPTION.findall(r["messages"][0]["content"])))
+    text = r["messages"][0]["content"]
+    if "Choices:" in text:
+        return len(set(INLINE.findall(text.split("Choices:", 1)[1].split(" Please answer", 1)[0])))
+    return len(set(OPTION.findall(text)) | set(SPACED.findall(text)))
 
 
 def shares(records) -> dict:
@@ -64,6 +70,8 @@ def main():
     ap.add_argument("--old", type=Path, required=True)
     ap.add_argument("--depth", type=int, default=3000)
     ap.add_argument("--phase", type=int, default=1000)
+    ap.add_argument("--extra", type=Path, action="append", default=[],
+                    help="another generated annotations.jsonl whose records are all kept (repeatable)")
     ap.add_argument("--out", type=Path, required=True, help="annotations.jsonl of the mix; images go next to it")
     ap.add_argument("--max-share", type=float, default=0.27)
     ap.add_argument("--min-keep", type=float, default=0.5)
@@ -72,12 +80,15 @@ def main():
     rng = np.random.default_rng(args.seed)
 
     scene, old = load(args.scene), load(args.old)
-    if args.scene.parent.resolve().name == args.old.parent.resolve().name:
-        raise SystemExit("--scene and --old live in directories with the same name; their images would collide")
+    dirs = [p.parent.resolve().name for p in (args.scene, args.old, *args.extra)]
+    if len(set(dirs)) != len(dirs):
+        raise SystemExit(f"input directories share a name ({dirs}); their images would collide")
     depth = [r for r in old if r["_rel"][0].startswith("depth_tier1/")]
     phase = [r for r in old if not r["_rel"][0].startswith("depth_tier1/")]
     pick = lambda recs, n: [recs[i] for i in sorted(rng.choice(len(recs), min(n, len(recs)), replace=False))]
     sources = {"scene": scene, "depth": pick(depth, args.depth), "phase": pick(phase, args.phase)}
+    for p in args.extra:
+        sources[f"extra:{p.parent.resolve().name}"] = load(p)
     records = [r for recs in sources.values() for r in recs]
     before = shares(records)
 

@@ -4,11 +4,13 @@ from pathlib import Path
 from aijgen.generators.base import Episode, Generator, Question
 from aijgen.generators.phase_qa import PhaseGenerator
 from aijgen.generators.scene_qa import SceneQAGenerator
+from aijgen.generators.task_success import TaskSuccessGenerator
 
 # name in config.yaml -> generator class
 REGISTRY = {
     PhaseGenerator.name: PhaseGenerator,
     SceneQAGenerator.name: SceneQAGenerator,
+    TaskSuccessGenerator.name: TaskSuccessGenerator,
 }
 
 

@@ -42,7 +42,21 @@ def erqa(question: str, options: list[str]) -> str:
     return question + " Choices: " + " ".join(f"{LETTERS[i]}. {o}." for i, o in enumerate(options)) + ERQA_SUFFIX
 
 
-MSMU_CONCISE = "Answer the question based only on the image. Give a concise answer."
+CROSSPOINT_PRE = ("I am providing you with two images of the same scene from different viewpoints. A red point is marked on "
+                  "the first image. You are given multiple points on the second image.")
+CROSSPOINT_JUDGE_Q = [  # the three wordings of CrossPoint Correspondence-Judgement (57 / 51 / 48 of its 156 items)
+    "The point in the first image correspond to which marker in the second image?",
+    "Which point in the second image matches the same 3d point as the red point in the first image?",
+    "Which point on the second image corresponds to the point in the first image?",
+]
+
+
+def crosspoint(question: str, options: list[str]) -> str:
+    """'I am providing you ... second image. <question>\\nA. Green dot  B. Blue dot  C. Yellow dot'"""
+    return f"{CROSSPOINT_PRE} {question}\n" + "  ".join(f"{LETTERS[i]}. {o}" for i, o in enumerate(options))
+
+
+MSMU_CONCISE ="Answer the question based only on the image. Give a concise answer."
 MSMU_NUMERIC = "Answer the question based only on the image. If the answer is numeric, output only the number and unit if necessary."
 
 

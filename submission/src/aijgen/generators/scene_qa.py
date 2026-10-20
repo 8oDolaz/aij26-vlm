@@ -8,18 +8,26 @@ of the moment together, and the question view's disparity gives each mask its de
 Detections are cached per source frame in <work_dir>/cache/<dataset>/ (work_dir: <output>/scene_qa by default), so
 re-running with other filter, scene or template settings loads no model.
 
+With a `crossview` block (aijgen.scene.crossview), frames with at least two non-blank views also get object-level
+cross-view questions: SAM 3 runs on a pair of views (rotating like the question view), plus every other non-blank
+view when crossview.check_third_view is on. crossview.pre_grasp_only keeps only frames of the first pre_grasp run of
+episodes that have phase labels (nothing in the gripper yet).
+
 Model references (sam3_model, depth_model, da3_src) are Hugging Face ids or paths; a relative path that exists under
-the submission root wins, so the packed ZIP can ship the weights next to the code.
+the submission root wins, so the packed ZIP can ship the weights next to the code. depth_model: null skips DA3
+(templates that need depth then find no candidates); frames cached with depth serve both settings.
 """
 import zlib
 from pathlib import Path
 
 import numpy as np
 
+from aijgen import phases as ph
 from aijgen.depth import lerobot
 from aijgen.generators.base import Generator, Question
 from aijgen.scene import detect as D
-from aijgen.scene.templates import build_scene, make_items
+from aijgen.scene.crossview import make_pair_items
+from aijgen.scene.templates import Scene, build_scene, make_items
 from aijgen.scene.vocab import DICT_DIR, load_dictionary, load_names
 
 SUBMISSION_DIR = Path(__file__).resolve().parents[3]
@@ -41,7 +49,9 @@ class SceneQAGenerator(Generator):
         self.work = Path(cfg["work_dir"]) if cfg.get("work_dir") else None
         self.filter = D.FilterParams(**cfg.get("filter", {}))
         self.scene_cfg = cfg.get("scene", {})
-        self.templates = cfg["templates"]
+        self.templates = cfg.get("templates") or {}
+        self.crossview = cfg.get("crossview") or {}
+        self.with_depth = bool(cfg.get("depth_model"))
         self.datasets = cfg["datasets"]
         self.span = tuple(cfg.get("frames_span", [0.05, 0.35]))
         self.n_frames = int(cfg.get("frames_per_episode", 2))
@@ -65,30 +75,55 @@ class SceneQAGenerator(Generator):
 
     def _models(self):
         if self._sam is None:
-            from aijgen.depth.models import DepthTeacher
             self._sam = D.Sam3(resolve(self.cfg["sam3_model"]))
-            self._depth = DepthTeacher(resolve(self.cfg["depth_model"]), resolve(self.cfg.get("da3_src")),
-                                       int(self.cfg.get("da3_process_res", 504)))
+            if self.with_depth:
+                from aijgen.depth.models import DepthTeacher
+                self._depth = DepthTeacher(resolve(self.cfg["depth_model"]), resolve(self.cfg.get("da3_src")),
+                                           int(self.cfg.get("da3_process_res", 504)))
         return self._sam, self._depth
 
+    def cache_ok(self, det: D.FrameDetections | None, cam: str, entries) -> bool:
+        """A cached frame is reused if it was made with the same detection params, names and camera, and has depth
+        whenever depth is wanted (params["depth"] is False only on frames cached without DA3)."""
+        if det is None or det.names != list(entries) or det.camera != cam:
+            return False
+        base = {k: v for k, v in det.params.items() if k != "depth"}
+        return base == self.params and (det.params.get("depth", True) or not self.with_depth)
+
     def detections(self, ep, fi: int, cam: str, valid: list[str], frames: dict, entries, absent) -> D.FrameDetections:
-        """From the cache, or SAM 3 on the question view plus DA3 on all valid views (then cached)."""
+        """From the cache, or SAM 3 on view `cam` plus DA3 on all valid views (then cached)."""
         path = None
         if self.work is not None:
             path = self.work / "cache" / ep.dataset / f"ep{ep.index:06d}_f{fi:04d}_{cam.split('.')[-1]}.npz"
             det = D.load(path)
-            if det is not None and det.params == self.params and det.names == list(entries) and det.camera == cam:
+            if self.cache_ok(det, cam, entries):
                 return det
         neg_rng = np.random.default_rng([self.seed, zlib.crc32(ep.dataset.encode()), ep.index, fi])
         n = min(self.params["negatives_per_frame"], len(absent))
         negatives = [absent[i] for i in sorted(neg_rng.choice(len(absent), n, replace=False))]
         sam, depth = self._models()
-        det = D.detect(sam, frames[cam][fi], cam, entries, negatives, self.params["mask_min"], self.params)
-        disps, _ = depth([frames[v][fi] for v in valid])
-        D.add_depth(det, disps[valid.index(cam)], self.params["depth_erode_frac"])
+        params = self.params if self.with_depth else {**self.params, "depth": False}
+        det = D.detect(sam, frames[cam][fi], cam, entries, negatives, self.params["mask_min"], params)
+        if self.with_depth:
+            disps, _ = depth([frames[v][fi] for v in valid])
+            D.add_depth(det, disps[valid.index(cam)], self.params["depth_erode_frac"])
         if path is not None:
             D.save(path, det)
         return det
+
+    def scene(self, det: D.FrameDetections, entries) -> Scene:
+        return build_scene(det, entries, self.filter,
+                           exclude_subjects=self.scene_cfg.get("exclude_subjects", ()),
+                           absent_presence=float(self.scene_cfg.get("absent_presence", 0.05)),
+                           max_count=int(self.scene_cfg.get("max_count", 6)))
+
+    def crossview_ok(self, ep, fi: int) -> bool:
+        """crossview.pre_grasp_only: the frame is in the episode's first pre_grasp run (episodes without phase
+        labels pass: their gripper hardly moves)."""
+        if not self.crossview.get("pre_grasp_only", True) or ep.labels is None:
+            return True
+        p, s, e = ph.runs(ep.labels)[0]
+        return p == ph.PRE_GRASP and s <= fi <= e
 
     def generate(self, ep, rng: np.random.Generator, videos: dict | None = None) -> list[Question]:
         dcfg = self.datasets.get(ep.dataset)
@@ -107,13 +142,28 @@ class SceneQAGenerator(Generator):
             if not valid:  # blank cameras: the episode was recorded without them
                 continue
             cam = valid[(ep.index + turn) % len(valid)]
-            det = self.detections(ep, fi, cam, valid, frames, entries, absent)
-            scene = build_scene(det, entries, self.filter,
-                                exclude_subjects=self.scene_cfg.get("exclude_subjects", ()),
-                                absent_presence=float(self.scene_cfg.get("absent_presence", 0.05)),
-                                max_count=int(self.scene_cfg.get("max_count", 6)))
-            for it in make_items(scene, rng, self.templates):
-                out.append(Question(it.question, it.answer, [fi], self.name,
-                                    meta={"camera": cam, "bench": it.bench, "template": it.template},
-                                    overlays=it.overlays))
+            if self.templates:
+                scene = self.scene(self.detections(ep, fi, cam, valid, frames, entries, absent), entries)
+                for it in make_items(scene, rng, self.templates):
+                    out.append(Question(it.question, it.answer, [fi], self.name,
+                                        meta={"camera": cam, "bench": it.bench, "template": it.template},
+                                        overlays=it.overlays))
+            if self.crossview.get("templates") and len(valid) >= 2 and self.crossview_ok(ep, fi):
+                out += self.crossview_questions(ep, fi, turn, valid, frames, entries, absent, rng)
         return out
+
+    def crossview_questions(self, ep, fi, turn, valid, frames, entries, absent, rng) -> list[Question]:
+        """Cross-view questions at one moment: image 1 = view a, image 2 = view b, the pair rotating over the valid
+        views; the other valid views only veto names (crossview.matches)."""
+        k = (ep.index + turn) % len(valid)
+        a, b = valid[k], valid[(k + 1) % len(valid)]
+        if rng.random() < 0.5:
+            a, b = b, a
+        scenes = {v: self.scene(self.detections(ep, fi, v, valid, frames, entries, absent), entries) for v in (a, b)}
+        others = []
+        if self.crossview.get("check_third_view", True):
+            others = [self.scene(self.detections(ep, fi, v, valid, frames, entries, absent), entries)
+                      for v in valid if v not in (a, b)]
+        return [Question(it.question, it.answer, [fi, fi], self.name,
+                         meta={"cameras": [a, b], "bench": it.bench, "template": it.template}, overlays=it.overlays)
+                for it in make_pair_items(scenes[a], scenes[b], others, entries, rng, self.crossview["templates"])]

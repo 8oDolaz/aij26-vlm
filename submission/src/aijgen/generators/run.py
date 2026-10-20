@@ -22,6 +22,20 @@ def source(q) -> str:
     return f"{q.kind}/{q.meta['template']}" if "template" in q.meta else q.kind
 
 
+def image_cameras(q, cameras: list[str]) -> list[list[str]]:
+    """The records a question becomes, each as one camera per image: meta["cameras"] (cross-view: a camera per
+    image, one record), else meta["camera"] (one record), else every camera of the dataset (one record each)."""
+    if "cameras" in q.meta:
+        return [list(q.meta["cameras"])]
+    cams = [q.meta["camera"]] if "camera" in q.meta else cameras
+    return [[cam] * len(q.frames) for cam in cams]
+
+
+def image_overlays(overlays: list[dict], k: int) -> list[dict]:
+    """Markers of image k: those with "image": k and those without an "image" key (drawn on every image)."""
+    return [o for o in overlays if o.get("image", k) == k]
+
+
 def generate(input_root: Path, out: Path, config: dict, relabel: bool = False) -> tuple[dict[str, list[dict]], dict]:
     """({source: ShareGPT records}, stats), source as in `source`. Image paths are relative to `out`."""
     generators = build_generators(config, work_root=out)
@@ -77,20 +91,20 @@ def generate(input_root: Path, out: Path, config: dict, relabel: bool = False) -
                 wanted = sorted({f for q in questions for f in q.frames})
                 frames = {cam: lerobot.read_frames(v, wanted) for cam, v in videos.items()}
                 for q in questions:
-                    cams = [q.meta["camera"]] if "camera" in q.meta else dcfg["cameras"]
-                    for cam in cams:
-                        imgs = [frames.get(cam, {}).get(f) for f in q.frames]
+                    for cams in image_cameras(q, dcfg["cameras"]):
+                        imgs = [frames.get(cam, {}).get(f) for f, cam in zip(q.frames, cams)]
                         if any(im is None or im.std() < ecfg["min_frame_std"] for im in imgs):
                             stats[f"{ds_name} {q.kind} views skipped"] += 1
                             continue
                         paths = []
-                        for f, im in zip(q.frames, imgs):
+                        for k, (f, cam, im) in enumerate(zip(q.frames, cams, imgs)):
                             stem = f"ep{ep.index:06d}_f{f:04d}_{cam.split('.')[-1]}"
-                            if q.overlays:  # markers make the image specific to this question
+                            marks = image_overlays(q.overlays, k)
+                            if marks:  # markers make the image specific to this question
                                 from aijgen.scene.render import draw_overlays
-                                tag = zlib.crc32(json.dumps(q.overlays, sort_keys=True).encode())
+                                tag = zlib.crc32(json.dumps(marks, sort_keys=True).encode())
                                 stem += f"_{q.kind}_{tag:08x}"
-                                im = draw_overlays(im, q.overlays)
+                                im = draw_overlays(im, marks)
                             rel = Path("frames") / ds_name / f"{stem}.jpg"
                             if not (out / rel).exists():
                                 (out / rel).parent.mkdir(parents=True, exist_ok=True)
@@ -105,7 +119,8 @@ def generate(input_root: Path, out: Path, config: dict, relabel: bool = False) -
                         stats[f"{ds_name} {q.kind} records"] += 1
                         stats[f"{q.kind} answer {q.answer}"] += 1
                         for k, v in q.meta.items():
-                            stats[f"{q.kind} {k} {v}"] += 1
+                            if not k.startswith("_") and not isinstance(v, (list, dict)):
+                                stats[f"{q.kind} {k} {v}"] += 1
 
             cache_f.write(json.dumps({
                 "dataset": ds_name,
@@ -120,4 +135,7 @@ def generate(input_root: Path, out: Path, config: dict, relabel: bool = False) -
                       f"{sum(map(len, records.values()))} records", flush=True)
 
     cache_f.close()
+    for g in generators:  # per-episode skip reasons of this run (episodes loaded from the cache are not recounted)
+        for reason, n in getattr(g, "skips", {}).items():
+            stats[f"{g.name} skip {reason}"] += n
     return records, dict(sorted(stats.items()))

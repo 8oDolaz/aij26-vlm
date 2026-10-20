@@ -1,17 +1,21 @@
 #!/usr/bin/env python3
-"""Hand check of the SAM 3 scene questions (docs/sam3_vqa_plan.md): run scene_qa on a few episodes per dataset and
-draw one contact sheet per template.
+"""Hand check of the SAM 3 questions (docs/sam3_vqa_plan.md): run the config's enabled SAM 3 generators (scene_qa,
+task_success) on a few episodes per dataset and draw one contact sheet per template.
 
-Each tile: the question image as it is saved (markers drawn) | the frame's detections (green = subject, nameable in
-questions; yellow = kept but not nameable; orange = contested, dropped), with the question, its options and the answer.
+Each tile: the question images as they are saved (markers drawn), then each image's detections (green = subject,
+nameable in questions; yellow = kept but not nameable; orange = contested, dropped), with the question, its options
+and the answer. Cross-view questions show both views; task-success tiles also say which kind of answer it is (yes,
+swap: object swapped, early: pre-grasp frame).
 Writes to --out:
-  scene_qa/cache/               SAM 3 + DA3 detections; generate_dataset.py --output <same dir> reuses them
+  <generator>/cache/            SAM 3 (+ DA3) detections; generate_dataset.py --output <same dir> reuses them
   sheet_<template>_<page>.jpg
-  review.jsonl                  one line per question: id, template, dataset, episode, frame, camera, question, answer
+  review.jsonl                  one line per question: id, template, dataset, episode, frames, cameras, question, answer
 Report wrong labels by id. The plan asks for >= 95% correct on ~50 questions per template before it goes into the mix.
 
 Run on the GPU box (the first run needs the GPU; cached frames load no model):
   docker compose exec dev python tools/scene_qa_sheet.py --input /data/raw --out runs/scene_qa_check --episodes 40
+  docker compose exec dev python tools/scene_qa_sheet.py --input /data/raw --out runs/p4_check \
+    --config configs/gen_p4.yaml --episodes 60
 """
 import argparse
 import json
@@ -29,10 +33,13 @@ REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "submission" / "src"))
 from aijgen.depth import lerobot  # noqa: E402
 from aijgen.generators.episodes import load_episodes  # noqa: E402
+from aijgen.generators.run import image_cameras, image_overlays  # noqa: E402
 from aijgen.generators.scene_qa import SceneQAGenerator  # noqa: E402
+from aijgen.generators.task_success import TaskSuccessGenerator  # noqa: E402
 from aijgen.scene import detect as D  # noqa: E402
 from aijgen.scene.render import draw_overlays  # noqa: E402
-from aijgen.scene.templates import build_scene  # noqa: E402
+
+GENERATORS = {g.name: g for g in (SceneQAGenerator, TaskSuccessGenerator)}
 
 PANEL_H, COLS, ROWS = 300, 2, 4
 FONT = cv2.FONT_HERSHEY_SIMPLEX
@@ -42,7 +49,8 @@ INLINE = re.compile(r"([A-D])\. (.+?)\.(?= [A-D]\. | Please)")
 
 def options(question: str) -> dict:
     """Letter -> option text, for the EmbSpatial / BLINK (one per line) and ERQA (inline) formats."""
-    opts = {m.group(1): m.group(2) for m in map(LINE.match, question.splitlines()) if m}
+    lines = [part for ln in question.splitlines() for part in re.split(r"  (?=[A-J]\. )", ln)]  # CrossPoint
+    opts = {m.group(1): m.group(2) for m in map(LINE.match, lines) if m}
     if not opts and "Choices:" in question:
         opts = dict(INLINE.findall(question.split("Choices:", 1)[1]))
     return opts
@@ -78,8 +86,8 @@ def detection_panel(rgb: np.ndarray, det: D.FrameDetections, scene, entries, p) 
     return img
 
 
-def tile(left: np.ndarray, right: np.ndarray, lines: list[str]) -> np.ndarray:
-    panels = [cv2.resize(im, (round(im.shape[1] * PANEL_H / im.shape[0]), PANEL_H)) for im in (left, right)]
+def tile(panels: list[np.ndarray], lines: list[str]) -> np.ndarray:
+    panels = [cv2.resize(im, (round(im.shape[1] * PANEL_H / im.shape[0]), PANEL_H)) for im in panels]
     top = np.hstack(panels)
     w = top.shape[1]
     lh = 15
@@ -116,38 +124,48 @@ def main():
     args = ap.parse_args()
 
     config = yaml.safe_load(args.config.read_text())
-    gcfg = dict(config["generators"]["scene_qa"], work_dir=str(args.out / "scene_qa"))
-    gen = SceneQAGenerator(gcfg)
+    gens = [GENERATORS[name](dict(gcfg, work_dir=str(args.out / name)))
+            for name, gcfg in config["generators"].items() if name in GENERATORS and gcfg.get("enabled", True)]
     by_template, review = defaultdict(list), []
     args.out.mkdir(parents=True, exist_ok=True)
     for ds in args.datasets:
         root = args.input / ds
-        if not (root / "meta" / "info.json").exists() or ds not in gen.datasets:
+        mine = [g for g in gens if ds in g.datasets]
+        if not (root / "meta" / "info.json").exists() or not mine:
             print(f"skip {ds}")
             continue
         ecfg = dict(config["episodes"]["datasets"][ds], max_episodes=args.episodes)
-        entries, _ = gen.vocab(ds)
         for n, (ep, videos) in enumerate(load_episodes(root, ecfg)):
-            questions = gen(ep, videos=videos)
-            print(f"[{ds} {n + 1}] ep{ep.index} \"{ep.task}\": {len(questions)} questions", flush=True)
-            for q in questions:
-                cam, fi = q.meta["camera"], q.frames[0]
-                rgb = lerobot.read_frames(videos[cam], [fi])[fi]
-                det = D.load(gen.work / "cache" / ds / f"ep{ep.index:06d}_f{fi:04d}_{cam.split('.')[-1]}.npz")
-                scene = build_scene(det, entries, gen.filter,
-                                    exclude_subjects=gen.scene_cfg.get("exclude_subjects", ()),
-                                    absent_presence=float(gen.scene_cfg.get("absent_presence", 0.05)),
-                                    max_count=int(gen.scene_cfg.get("max_count", 6)))
-                qid = len(review)
-                t = q.meta["template"]
-                lines = [f"#{qid} {t} | {ds} ep{ep.index} f{fi} {cam.split('.')[-1]} | {ep.task}"]
-                lines += caption(q.question, q.answer)
-                if t == "existence_msmu":
-                    lines.append(f"absent here: {', '.join(scene.absent)}")
-                by_template[t].append(tile(draw_overlays(rgb, q.overlays), detection_panel(rgb, det, scene, entries, gen.filter),
-                                           lines))
-                review.append({"id": qid, "template": t, "dataset": ds, "episode": ep.index, "frame": fi,
-                               "camera": cam, "question": q.question, "answer": q.answer})
+            for gen in mine:
+                entries, _ = gen.vocab(ds)
+                questions = gen(ep, videos=videos)
+                print(f"[{ds} {n + 1}] {gen.name} ep{ep.index} \"{ep.task}\": {len(questions)} questions", flush=True)
+                for q in questions:
+                    cams = image_cameras(q, [])[0]
+                    shown, panels = [], []
+                    for k, (fi, cam) in enumerate(zip(q.frames, cams)):
+                        rgb = lerobot.read_frames(videos[cam], [fi])[fi]
+                        det = D.load(gen.work / "cache" / ds / f"ep{ep.index:06d}_f{fi:04d}_{cam.split('.')[-1]}.npz")
+                        scene = gen.scene(det, entries)
+                        shown.append(draw_overlays(rgb, image_overlays(q.overlays, k)))
+                        panels.append(detection_panel(rgb, det, scene, entries, gen.filter))
+                    qid = len(review)
+                    t = q.meta["template"]
+                    where = ", ".join(f"f{fi} {cam.split('.')[-1]}" for fi, cam in zip(q.frames, cams))
+                    lines = [f"#{qid} {t} | {ds} ep{ep.index} {where} | {ep.task}"]
+                    if "answer_kind" in q.meta:
+                        lines.append(f"answer kind: {q.meta['answer_kind']}"
+                                     + (f" (swapped in: {q.meta['_swap']})" if "_swap" in q.meta else ""))
+                    lines += caption(q.question, q.answer)
+                    if t == "existence_msmu":
+                        lines.append(f"absent here: {', '.join(scene.absent)}")
+                    by_template[t].append(tile(shown + panels, lines))
+                    review.append({"id": qid, "template": t, "dataset": ds, "episode": ep.index, "frames": q.frames,
+                                   "cameras": cams, "question": q.question, "answer": q.answer,
+                                   "answer_kind": q.meta.get("answer_kind")})
+    for gen in gens:
+        if getattr(gen, "skips", None):
+            print(f"{gen.name} episodes: {dict(gen.skips.most_common())}")
     for t, tiles in by_template.items():
         write_sheets(tiles, args.out / f"sheet_{t}")
     with open(args.out / "review.jsonl", "w") as f:

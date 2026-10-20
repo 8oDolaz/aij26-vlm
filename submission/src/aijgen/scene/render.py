@@ -2,6 +2,8 @@
 
   {"kind": "dot", "xy": [x, y], "color": [r, g, b], "label": "A" or None}   filled dot, black outline, optional letter
   {"kind": "box", "xyxy": [x0, y0, x1, y1], "color": [r, g, b], "label": "A"}  box with its letter in a filled tag
+  {"kind": "ring", "xy": [x, y], "color": [r, g, b]}                         hollow circle (ERQA "circles")
+An overlay with "image": k belongs to image k of a multi-image question only; run.py passes each image its own.
 """
 import cv2
 import numpy as np
@@ -33,6 +35,11 @@ def draw_overlays(rgb: np.ndarray, overlays: list[dict]) -> np.ndarray:
             cv2.circle(img, (x, y), r, (0, 0, 0), 1, cv2.LINE_AA)
             if o.get("label"):
                 _label(img, o["label"], x + r + 2, y - r - 2 - round(18 * scale), scale, (255, 255, 255), (0, 0, 0))
+        elif o["kind"] == "ring":
+            x, y = (int(v) for v in o["xy"])
+            rr = round(1.6 * r)
+            cv2.circle(img, (x, y), rr + thick // 2 + 1, (0, 0, 0), 1, cv2.LINE_AA)  # thin outline for contrast
+            cv2.circle(img, (x, y), rr, color, thick, cv2.LINE_AA)
         elif o["kind"] == "box":
             x0, y0, x1, y1 = (int(round(v)) for v in o["xyxy"])
             cv2.rectangle(img, (x0, y0), (x1, y1), color, thick, cv2.LINE_AA)

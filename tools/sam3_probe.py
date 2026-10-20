@@ -27,7 +27,6 @@ to check the code path without access; its boxes are meaningless.
 """
 import argparse
 import json
-import re
 import sys
 import time
 from collections import Counter, defaultdict
@@ -41,70 +40,16 @@ REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "submission" / "src"))
 from aijgen.depth.lerobot import list_episodes, read_frames  # noqa: E402
 from aijgen.scene.detect import Sam3, select  # noqa: E402
-from aijgen.scene.vocab import (DEFAULT_EXCLUDE, DICT_DIR, Entry, load_dictionary, map_to_dictionary,  # noqa: E402
-                                name_ok)
+from aijgen.scene.instructions import MAX_TASK_WORDS, instruction_names  # noqa: E402
+from aijgen.scene.vocab import DEFAULT_EXCLUDE, DICT_DIR, Entry, load_dictionary, map_to_dictionary  # noqa: E402
 
 VOCABS = ("instr", "dict", "neg")
 SWEEP = (0.3, 0.4, 0.5, 0.6)    # thresholds for the present-vs-absent table
 MIN_FRAME_STD = 8.0             # flatter frames are blank cameras
 TILE_H, COLS, ROWS = 360, 3, 4
 
-# ---------------------------------------------------------------------------------------------------------------------
-# Instruction parsing: "take the eggplant and put it between the two right burners" -> ["eggplant", "burner"]
-# ---------------------------------------------------------------------------------------------------------------------
-VERBS = {
-    "pick", "picked", "lift", "lifted", "put", "place", "placed", "set", "move", "moved", "take", "took", "taken",
-    "grab", "grabbed", "get", "got", "bring", "brought", "open", "opened", "close", "closed", "fold", "folded",
-    "unfold", "unfolded", "push", "pushed", "pull", "pulled", "slide", "slid", "flip", "flipped", "turn", "turned",
-    "knock", "knocked", "sweep", "swept", "wipe", "wiped", "stack", "stacked", "remove", "removed", "insert", "inserted",
-    "drop", "dropped", "rotate", "rotated", "separate", "separated", "nudge", "nudged", "add", "added", "transfer",
-    "transferred", "reposition", "repositioned", "pour", "poured", "hang", "hung", "cover", "covered", "uncover",
-    "uncovered"}
-PARTICLES = {"up", "down", "over", "out", "off", "back", "away"}
-PIECE_OF = re.compile(r"\b(?:piece|pieces|bunch|pair|sheet)\s+of\b")
-SPLIT = re.compile(r"[,;.]|\b(?:and|then|into|onto|in|on|to|from|of|at|by|near|beside|between|under|underneath|"
-                   r"inside|above|below|along|against|with|toward|towards|across|around|behind|next|so|it|them)\b")
-DROP = {"the", "a", "an", "two", "three", "some", "its", "their", "this", "that", "other", "another", "left", "right",
-        "top", "bottom", "middle", "center", "centre", "front", "back", "upper", "lower", "side", "edge", "corner",
-        "upright", "one", "ones"} | VERBS | PARTICLES
-MAX_TASK_WORDS = 20  # longer "instructions" are mostly captions or junk ("Look at the sequence of images...")
-IRREGULAR = {"knives": "knife", "shelves": "shelf", "leaves": "leaf", "loaves": "loaf"}
-
-
-def is_verb_form(word: str) -> bool:
-    """folds, pushes, putting, moving: inflections of VERBS that the word list does not spell out."""
-    stems = {word.removesuffix("s"), word.removesuffix("es")}
-    if word.endswith("ing") and len(word) > 5:
-        stem = word[:-3]
-        stems |= {stem, stem + "e", stem[:-1] if len(stem) > 2 and stem[-1] == stem[-2] else stem}
-    return bool(stems & VERBS)
-
-
-def singular(word: str) -> str:
-    if word in IRREGULAR:
-        return IRREGULAR[word]
-    if len(word) > 4 and word.endswith("ies"):
-        return word[:-3] + "y"
-    if len(word) > 4 and re.search(r"(ches|shes|xes|sses)$", word):
-        return word[:-2]
-    if len(word) > 3 and word.endswith("s") and not word.endswith(("ss", "us", "is")):
-        return word[:-1]
-    return word
-
-
-def instruction_names(task: str, exclude=DEFAULT_EXCLUDE, max_words: int = 4) -> list[str]:
-    """Object noun phrases of an instruction, in order, without verbs, articles, positions, surfaces or `exclude`d
-    heads."""
-    names = []
-    for chunk in SPLIT.split(PIECE_OF.sub(" ", task.lower())):
-        words = [w for w in re.sub(r"[^a-z0-9 ]", " ", chunk).split() if w not in DROP and not is_verb_form(w)]
-        if not words:
-            continue
-        words[-1] = singular(words[-1])
-        name = " ".join(words[-max_words:])
-        if name_ok(name, exclude) and name not in names:
-            names.append(name)
-    return names
+# Instruction parsing ("take the eggplant and put it between the two right burners" -> ["eggplant", "burner"]) lives
+# in aijgen.scene.instructions, shared with the task-success questions.
 
 
 # ---------------------------------------------------------------------------------------------------------------------
