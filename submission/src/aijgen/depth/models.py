@@ -80,19 +80,22 @@ class DepthTeacher:
 
 
 class Segmenter:
-    """Instance segmentation via SAM 2.1 hiera."""
+    """SAM2.1 automatic mask generation, flattened to one label map where the smallest covering mask wins.
 
-    def __init__(self, model_id: str = "facebook/sam2.1-hiera-small", points_per_side: int = 32,
-                 pred_iou_thresh: float = 0.8, stability_score_thresh: float = 0.9):
+    fp32 only: the transformers pipeline's NMS fails in fp16. About 2.3 s per 640x480 frame on a 5090.
+    """
+
+    def __init__(self, model_id: str, points_per_batch: int = 64, pred_iou_thresh: float = 0.86,
+                 stability_score_thresh: float = 0.92):
         from transformers import pipeline
-        device = 0 if torch.cuda.is_available() else -1
-        self.pipe = pipeline("mask-generation", model=model_id, device=device)
-        self.kwargs = dict(points_per_side=points_per_side, pred_iou_thresh=pred_iou_thresh,
+        self.pipe = pipeline("mask-generation", model=model_id, device=0 if torch.cuda.is_available() else -1)
+        self.kwargs = dict(points_per_batch=points_per_batch, pred_iou_thresh=pred_iou_thresh,
                            stability_score_thresh=stability_score_thresh)
 
     def __call__(self, frame: np.ndarray) -> np.ndarray:
+        from PIL import Image
         masks = [np.asarray(m, dtype=bool) for m in self.pipe(Image.fromarray(frame), **self.kwargs)["masks"]]
-        labels = np.zeros(frame.shape[:2], np.int16)
-        for k in sorted(range(len(masks)), key=lambda k: -masks[k].sum()):
+        labels = np.zeros(frame.shape[:2], np.int16)  # 0 = no mask
+        for k in sorted(range(len(masks)), key=lambda k: -masks[k].sum()):  # largest first, smaller ones overwrite
             labels[masks[k]] = k + 1
         return labels

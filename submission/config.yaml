@@ -1,43 +1,57 @@
-# Generator config: seed, dataset quotas, sample mix.
-# python generate_dataset.py --input /data/raw --output /output/annotations.jsonl --config config.yaml
+# Final generator config: one run reproduces the VLM SFT data of the submitted model (d4_mix).
+#
+#   python generate_dataset.py --input /data/raw --output /output/annotations.jsonl --config config.yaml
+#
+# d4_mix was built in development from two generator runs (configs/gen_d2_depth_phase.yaml: depth + phase questions;
+# configs/gen_scene14k.yaml: SAM 3 scene questions) merged with 3000 depth_tier1 + 1000 phase_qa + all scene records
+# and the answer-letter cap below. This file runs the same three sources with the same settings and does the same
+# sampling in one step, so the output is equivalent to annotations.jsonl (same generators, settings and caps), not a
+# byte copy of it: the development merge sampled in two stages.
+# The episode lists (episodes:) are gen_scene14k's; phase_qa used 1600 Fractal episodes there instead of 1500.
+#
+# Models: Hugging Face ids in development; in the packed ZIP they are paths under the submission root
+# (weights/sam3, weights/da3-base, weights/sam2.1-hiera-small; DA3 source and addict in src/third_party), loaded
+# offline. Rough cost: ~1-1.5 h SAM 3 + DA3 (scene) and ~2 h DA3 + SAM 2.1 (depth) on one RTX 5090.
 seed: 0
 
-# Max records kept per source (null = all), sampled with the seed; then everything is shuffled together.
+# Max records kept per source (sampled with the seed), then everything is shuffled together.
 mix:
-  depth_tier1: 2000
-  phase_qa: 3000
-  scene_qa: null             # keep every scene question generated; a {template: cap} mapping caps per template
-                             # (configs/gen_scene14k.yaml)
+  depth_tier1: 3000
+  phase_qa: 1000
+  scene_qa:                  # per template; templates left out are kept whole
+    relation_embspatial: 4000  # EmbSpatial left/right/above/under, 4 options
+    far_embspatial: 1700       # 4 options
+    close_embspatial: 1400     # 4 options
+    pointing_erqa: 1400        # ERQA, 4 options
+    counting_blink: 700        # BLINK, 4 options
+    relation_msmu: 1900        # free-form
+    existence_msmu: 1000       # free-form
+    counting_msmu: 800         # free-form
+    relation_blink: 450        # yes/no, 2 options
+    localization_blink: 350    # box A/B, 2 options
 
-letter_balance:              # trim two-option sources so no answer letter goes over max_share (docs #0)
-  max_share: 0.27
-  min_keep: 0.5              # never drop more than half of a two-option source
+letter_balance:              # generate_dataset.balance_letters
+  max_share: 0.27            # no answer letter above this share of the bare-letter answers
+  min_keep: 0.5              # never drop more than half of a two-option template
 
-# Relative-depth Tier 1: BLINK-style point pairs (docs/relative_depth_plan.md, section 5).
-# Gap thresholds are in per-frame normalised disparity (p2..p98 -> 0..1), calibrated on NYU-v2 (section 2.2) with
-# Depth Anything V2; DA3's inverse depth uses the same scale, but the thresholds are not yet re-measured for DA3.
+# Relative-depth Tier 1: BLINK-style point pairs and 3-4 point sets (docs/relative_depth_plan.md, section 5).
 depth_tier1:
   enabled: true
   seed: 0
-  depth_model: depth-anything/Depth-Anything-V2-Small-hf
+  depth_model: depth-anything/DA3-BASE   # Apache-2.0; any-view: all views of a moment go into one call
+  da3_src: example/depth-anything-3/src  # depth_anything_3 package (github.com/ByteDance-Seed/Depth-Anything-3)
+  da3_process_res: 504       # longest side DA3 sees (its default); 640x480 Bridge frames run at 504x378
   segmenter: facebook/sam2.1-hiera-small
   render_width: 512          # BLINK images are ~500 px wide; marker sizes scale with this
   min_frame_std: 8.0         # skips blank frames of cameras an episode does not have
   frames_span: [0.1, 0.9]    # source frames are spread over this part of each episode
   datasets:
     bridge:
-      # Depth is predicted from all views together; questions are asked on one of them, rotating over the views
       views: [observation.images.image_0, observation.images.image_1, observation.images.image_2]
       min_views: 3           # non-blank views needed at a source frame (many episodes only have image_0)
-      max_episodes: 1500      # evenly spread over the episodes on disk with min_views views (1933 locally)
+      max_episodes: 1400     # D2: 4200 source frames, ~9.6k depth records before the 9000 cap
       min_length: 15
       frames_per_episode: 3
-    fractal:
-      views: [observation.images.image]
-      min_views: 1
-      max_episodes: 200
-      min_length: 15
-      frames_per_episode: 2
   points:
     edge_radius: 4           # 9x9 window
     edge_max: 0.10           # disparity range in the window, fraction of the frame range
@@ -63,78 +77,89 @@ depth_tier1:
     stability_change: 0.10   # a point that moved more than this in a neighbour is skipped there (arm, object)
     stability_min_valid: 2
   prompts:
-    p_dot: 0.2               # filled-dot markers instead of BLINK rings (free-form prompts only)
+    p_dot: 0.2               # filled-dot markers instead of BLINK rings
     p_blink: 0.6             # BLINK prompt verbatim, ring markers
     p_blink_farther: 0.1     # same, asking for the farther point
+  sets:
+    enabled: true
+    sizes: {3: 0.3, 4: 0.7}    # share of sets by point count
+    max_per_frame: 12          # D2: more sets per frame; the background cap and shortcut balance drop most
+    p_farthest: 0.15           # D2: the background cap removes far more closest sets, this evens them out
+    p_numbered: 0.5            # markers 1..k listed under shuffled option letters; else BLINK-like markers A..k
+  question_mix: {pairs: 0.35, sets: 0.65}
 
 # Per-episode question generators (aijgen.generators); their frames are written once per camera listed in episodes.
 generators:
   phase_qa:
     enabled: true
+    # where inside a phase run the question frame is sampled, as fractions of the run length
     frame_range: [0.1, 0.9]
-    min_phase_seconds: 0.5
-    release_min_distance: 0.05
     phase_frame_range:
       contact: [0.1, 0.9]
     seed: 42
     merge_phases: true
+    # ask only about these phases; with merge_phases: true only pre_grasp, contact, post_grasp exist
     labeled_phases: [pre_grasp, contact, post_grasp]
-  # SAM 3 scene questions (docs/sam3_vqa_plan.md, aijgen.scene). Detections are cached in <output>/scene_qa/cache/,
-  # so filter / scene / templates can be re-tuned with --relabel without a GPU.
+    min_phase_seconds: 0.6
+    # releasing: the gripper is open and the arm has moved at least this far (meters)
+    # from where it let go, so the release is visible on the image
+    release_min_distance: 0.04
+
   scene_qa:
     enabled: true
     seed: 42
-    sam3_model: facebook/sam3              # gated HF id in dev; a path under submission/ in the packed ZIP (bf16)
+    sam3_model: facebook/sam3              # gated HF id
     depth_model: depth-anything/DA3-BASE   # Apache-2.0; all views of a moment go into one call
-    da3_src: example/depth-anything-3/src  # depth_anything_3 package; a path under submission/ wins if present
+    da3_src: example/depth-anything-3/src  # depth_anything_3 package
     da3_process_res: 504
     frames_span: [0.05, 0.35]              # early in the episode: objects not yet moved
     frames_per_episode: 2
     min_length: 10
     min_frame_std: 8.0                     # flatter views are blank cameras
-    datasets:                              # question views rotate over the non-blank ones; dictionaries in aijgen/scene/dicts/
+    datasets:                              # question views rotate over the non-blank ones
       bridge:
         views: [observation.images.image_0, observation.images.image_1, observation.images.image_2]
       fractal:
         views: [observation.images.image]
     detection:                             # changing these recomputes cached frames
-      mask_min: 0.5                        # masks for boxes scoring at least this
-      negatives_per_frame: 8               # absent-list names asked per frame (existence questions)
-      depth_erode_frac: 0.01               # mask erosion before the median depth, fraction of the width
+      mask_min: 0.5
+      negatives_per_frame: 8
+      depth_erode_frac: 0.01
     filter:                                # aijgen.scene.detect.FilterParams
-      threshold: 0.85                      # min box score; tuned on the probe's closed-dictionary sheets
+      threshold: 0.85
       max_area: 0.4
       dup_iou: 0.7
       contain: 0.85
       conflict_iou: 0.7
       margin: 0.15
-      uncertain: 0.3                       # boxes between this and threshold block subjects, counts and absence
+      uncertain: 0.3
     scene:
-      exclude_subjects: [stove, stovetop, cooktop, basin]   # fire on other objects (stove on burners)
+      exclude_subjects: [stove, stovetop, cooktop, basin]
       absent_presence: 0.05
       max_count: 6
-    templates:                             # aijgen.scene.templates; per_frame = max questions per source frame
-      relation_embspatial: {per_frame: 1, gap_frac: 0.02}
+    templates:                             # per_frame = max questions per source frame
+      relation_embspatial: {per_frame: 2, gap_frac: 0.02}   # 2: its cap is the largest
       relation_blink: {per_frame: 1, gap_frac: 0.02}
       relation_msmu: {per_frame: 1, gap_frac: 0.02}
-      close_embspatial: {per_frame: 1, n_options: 4, margin: 0.10}   # margin in normalised disparity
+      close_embspatial: {per_frame: 1, n_options: 4, margin: 0.10}
       far_embspatial: {per_frame: 1, n_options: 4, margin: 0.10}
       pointing_erqa: {per_frame: 1, p_letters: 0.3, min_dot_dist: 0.08, erode_frac: 0.015}
-      localization_blink: {per_frame: 1, iou: [0.15, 0.45], max_shift: 0.8, min_area: 0.003}  # wrong box: IoU with the real one
+      localization_blink: {per_frame: 1, iou: [0.15, 0.45], max_shift: 0.8, min_area: 0.003}
       existence_msmu: {per_frame: 1, p_present: 0.3}
       counting_blink: {per_frame: 1}
       counting_msmu: {per_frame: 1}
 
-# Datasets the per-episode generators read (aijgen.generators.episodes)
+
+# Datasets the per-episode generators read (aijgen.generators.episodes), evenly spread over the episodes on disk
 episodes:
-  min_frame_std: 8.0         # a camera whose frame is this flat is blank in that episode: no record for it
+  min_frame_std: 8.0
   datasets:
     bridge:
       cameras: [observation.images.image_0, observation.images.image_1, observation.images.image_2]
-      gripper_dim: 6         # in observation.state
-      closed_high: false     # tools/fetch_data.py SOURCES
+      gripper_dim: 6
+      closed_high: false
       min_length: 10
-      max_episodes: 1500     # evenly spread over the episodes with a video for the first camera on disk
+      max_episodes: 1500
     fractal:
       cameras: [observation.images.image]
       gripper_dim: 7

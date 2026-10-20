@@ -40,7 +40,8 @@ class ObjectQAGenerator(Generator):
     def _ensure_models(self):
         """Lazy initialization of SAM 2.1 and SigLIP classifiers."""
         if self.segmenter is None:
-            self.segmenter = Segmenter(self.sam_model_id)
+            from aijgen.paths import resolve
+            self.segmenter = Segmenter(resolve(self.sam_model_id))
         if self.classifier is None:
             self.classifier = CropSegmentClassifier(self.siglip_model_id)
 

@@ -18,20 +18,10 @@ import numpy as np
 
 from aijgen.depth import lerobot
 from aijgen.generators.base import Generator, Question
+from aijgen.paths import resolve
 from aijgen.scene import detect as D
 from aijgen.scene.templates import build_scene, make_items
 from aijgen.scene.vocab import DICT_DIR, load_dictionary, load_names
-
-SUBMISSION_DIR = Path(__file__).resolve().parents[3]
-
-
-def resolve(ref: str | None) -> str | None:
-    """`ref` as a path under the submission root if one exists there, else unchanged."""
-    if not ref or Path(ref).is_absolute():
-        return ref
-    local = SUBMISSION_DIR / ref
-    return str(local) if local.exists() else ref
-
 
 class SceneQAGenerator(Generator):
     name = "scene_qa"

@@ -5,15 +5,24 @@ Stages into artifacts/<name>/ (submission/ itself stays code-only), then:
 - copies smolvlm2/ (top-level files only) and saves it in bf16, which the benches load anyway;
 - copies action_expert/ and rewrites vlm_model_name / tokenizer_name to the judge path;
 - checks layout, no images/caches, no remote refs, tensor names vs the demo, no NaN/Inf;
+- with generator weights (--sam3/--da3/--sam2) copies them to weights/<name>/ (SAM 3 in bf16, which it runs in anyway;
+  the others bit-exact), vendors the DA3 source and missing pure-Python deps (--da3-src, --pydeps) into src/third_party/,
+  and points config.yaml's model refs at them, so the generator runs offline from the ZIP;
+- checks layout, no images/caches, no remote refs, every config.yaml model ref shipped, tensor names vs the demo,
+  no NaN/Inf;
 - zips to artifacts/<name>.zip (<= 5 GB).
 Then verify it offline in the organizers' image: tools/verify_submission.sh artifacts/<name>.zip
 
 Example:
   python tools/pack_submission.py --name a0_base --from runs/a0/submission \\
-      --annotations data/gen/v0/annotations.jsonl --configs configs/vla/a0.yaml
+      --annotations data/gen/v0/annotations.jsonl --configs configs/vla/a0.yaml \\
+      --sam3 <sam3 snapshot> --da3 <DA3-BASE snapshot> --sam2 <sam2.1-hiera-small snapshot> \\
+      --da3-src example/depth-anything-3/src --pydeps <site-packages>/addict
 """
 import argparse
+import hashlib
 import json
+import re
 import shutil
 import sys
 import zipfile
@@ -23,7 +32,19 @@ REPO = Path(__file__).resolve().parents[1]
 JUDGE_VLM_PATH = "/home/ubuntu22/aij_robotics_judge/submission/smolvlm2"
 JUDGE_PATH_KEYS = ("vlm_model_name", "tokenizer_name")
 DEMO_MANIFEST = REPO / "vendor" / "demo_submission" / "weights_manifest.json"
+DEMO_AE_CONFIG = REPO / "vendor" / "demo_submission" / "action_expert" / "config.json"
 MAX_ZIP_BYTES = 5 * 10**9  # "5 GB"; decimal is the stricter reading
+
+# Generator models: CLI flag -> (HF id used in config.yaml, path in the ZIP, convert to bf16)
+GEN_WEIGHTS = {
+    "sam3": ("facebook/sam3", "weights/sam3", True),
+    "da3": ("depth-anything/DA3-BASE", "weights/da3-base", False),
+    "sam2": ("facebook/sam2.1-hiera-small", "weights/sam2.1-hiera-small", False),
+}
+THIRD_PARTY = "src/third_party"  # DA3 package + vendored deps; DepthTeacher puts da3_src on sys.path
+DA3_SRC_REF = "example/depth-anything-3/src"
+MODEL_REF_KEYS = ("sam3_model", "depth_model", "segmenter", "da3_src", "sam_model", "siglip_model")
+VENDOR_SUFFIXES = {".py", ".yaml", ".yml", ".json", ".txt"}
 
 CODE_FILES = ("README.md", "requirements.txt", "generate_dataset.py", "config.yaml")
 # Layout from docs/organizers/task_description.txt
@@ -139,7 +160,127 @@ def copy_action_expert(src: Path, dst: Path, judge_path: str | None) -> int:
                 rewritten += n
                 continue
         shutil.copy2(f, dst / f.name)
+    ensure_policy_type(dst)
     return rewritten
+
+
+def ensure_policy_type(ae_dir: Path) -> None:
+    """LeRobot checkpoints may omit `type` in config.json; the kit's loader (scaling_lawyer smolvla_model
+    _ensure_policy_config_type) then writes it from train_config.json, which fails on a read-only submission.
+    Do the same here so the shipped config needs no rewrite."""
+    path = ae_dir / "config.json"
+    if not path.is_file():
+        return
+    cfg = json.loads(path.read_text())
+    if cfg.get("type"):
+        return
+    policy_type = "smolvla"
+    tc = ae_dir / "train_config.json"
+    if tc.is_file():
+        nested = json.loads(tc.read_text()).get("policy")
+        if isinstance(nested, dict) and nested.get("type"):
+            policy_type = str(nested["type"])
+    cfg["type"] = policy_type
+    path.write_text(json.dumps(cfg, indent=4) + "\n")
+    print(f"  note: action_expert/config.json had no type; set to {policy_type!r} (as the kit's loader would)")
+
+
+def copy_gen_weights(src: Path, dst: Path, bf16: bool) -> None:
+    """An HF snapshot dir (symlinks followed) into dst; safetensors and config dtype to bf16 if asked."""
+    dst.mkdir(parents=True)
+    for f in sorted(src.iterdir()):
+        if f.is_dir() or f.name.startswith("."):
+            continue
+        if bf16 and f.suffix == ".safetensors":
+            convert_safetensors_bf16(f, dst / f.name)
+        elif bf16 and f.name == "config.json":
+            cfg = json.loads(f.read_text())
+            set_dtype_bf16(cfg)
+            (dst / f.name).write_text(json.dumps(cfg, indent=2) + "\n")
+        else:
+            shutil.copy(f, dst / f.name)
+
+
+def _vendor_ignore(d, names):
+    """Only source and config files of vendored packages (no caches, images, notebooks)."""
+    return [n for n in names if n in FORBIDDEN_DIRS
+            or (not (Path(d) / n).is_dir() and Path(n).suffix not in VENDOR_SUFFIXES)]
+
+
+def find_license(pkg_dir: Path) -> Path | None:
+    """LICENSE next to a source checkout's package dir, or in a site-packages <name>-*.dist-info."""
+    cands = [*pkg_dir.parent.glob("LICENSE*"), *pkg_dir.parent.parent.glob("LICENSE*"),
+             *pkg_dir.parent.glob(f"{pkg_dir.name}-*.dist-info/LICENSE*"),
+             *pkg_dir.parent.glob(f"{pkg_dir.name}-*.dist-info/licenses/LICENSE*")]
+    return next((c for c in cands if c.is_file()), None)
+
+
+def vendor_package(pkg: Path, third: Path) -> None:
+    shutil.copytree(pkg, third / pkg.name, ignore=_vendor_ignore)
+    lic = find_license(pkg)
+    if lic is not None:
+        (third / "LICENSES").mkdir(exist_ok=True)
+        shutil.copy(lic, third / "LICENSES" / f"{pkg.name}.LICENSE")
+    else:
+        print(f"  note: no LICENSE found for {pkg.name}")
+
+
+def rewrite_config_refs(text: str, ref_map: dict[str, str]) -> tuple[str, int]:
+    """Point `key: <HF id>` lines of config.yaml at shipped paths (comments elsewhere kept). Returns (text, n)."""
+    pat = re.compile(rf"^(\s*)({'|'.join(MODEL_REF_KEYS)}):\s*(\S+)(.*)$", re.M)
+    n = 0
+
+    def sub(m):
+        nonlocal n
+        indent, key, val, _ = m.groups()
+        if val not in ref_map:
+            return m.group(0)
+        n += 1
+        return f"{indent}{key}: {ref_map[val]}  # shipped in the ZIP; {val} in development"
+    return pat.sub(sub, text), n
+
+
+def model_refs(obj, path=""):
+    """(json_path, value) of every model reference in a parsed config."""
+    for p, key, val in iter_strings(obj, path):
+        if key in MODEL_REF_KEYS:
+            yield p, val
+
+
+def check_config_refs(stage_dir: Path) -> list[str]:
+    """Every model ref in the staged config.yaml must be a relative path that exists in the ZIP (no HF ids)."""
+    import yaml
+    cfg = yaml.safe_load((stage_dir / "config.yaml").read_text())
+    if not isinstance(cfg, dict):
+        return []
+    return [f"config.yaml{p} = {v!r} is not shipped in the ZIP (an HF id or missing path; offline run would fail)"
+            for p, v in model_refs(cfg) if Path(v).is_absolute() or not (stage_dir / v).exists()]
+
+
+def stage_generator(args, stage_dir: Path) -> int:
+    """Generator weights + vendored code, then config.yaml refs rewritten. Returns refs rewritten."""
+    ref_map = {}
+    for flag, (hf_id, rel, bf16) in GEN_WEIGHTS.items():
+        src = getattr(args, flag)
+        if src is None:
+            continue
+        print(f"  {rel:<27} <- {src}{' (to bf16)' if bf16 else ''}")
+        copy_gen_weights(src, stage_dir / rel, bf16)
+        ref_map[hf_id] = rel
+    third = stage_dir / THIRD_PARTY
+    if args.da3_src is not None:
+        print(f"  {THIRD_PARTY}/depth_anything_3 <- {args.da3_src}")
+        third.mkdir(parents=True, exist_ok=True)
+        vendor_package(args.da3_src / "depth_anything_3", third)
+        ref_map[DA3_SRC_REF] = THIRD_PARTY
+    for pkg in args.pydeps:
+        print(f"  {THIRD_PARTY}/{pkg.name} <- {pkg}")
+        third.mkdir(parents=True, exist_ok=True)
+        vendor_package(pkg, third)
+    cfg = stage_dir / "config.yaml"
+    text, n = rewrite_config_refs(cfg.read_text(), ref_map)
+    cfg.write_text(text)
+    return n
 
 
 def stage(args, stage_dir: Path) -> int:
@@ -148,6 +289,7 @@ def stage(args, stage_dir: Path) -> int:
         shutil.copy2(sub / name, stage_dir / name)
     shutil.copytree(sub / "src", stage_dir / "src",
                     ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".pytest_cache"))
+    args.config_refs_rewritten = stage_generator(args, stage_dir)
     shutil.copy2(args.annotations, stage_dir / "annotations.jsonl")
     if args.configs:
         (stage_dir / "configs").mkdir()
@@ -155,22 +297,41 @@ def stage(args, stage_dir: Path) -> int:
             shutil.copy2(c, stage_dir / "configs" / c.name)
     print(f"  smolvlm2      <- {args.vlm}{'' if args.keep_fp32 else ' (to bf16)'}")
     copy_vlm(args.vlm, stage_dir / "smolvlm2", bf16=not args.keep_fp32)
+    if args.vlm_fill is not None:
+        for name in REQUIRED["smolvlm2"]:
+            if not (stage_dir / "smolvlm2" / name).exists() and (args.vlm_fill / name).is_file():
+                print(f"  note: smolvlm2/{name} missing in {args.vlm}, taken from {args.vlm_fill}")
+                shutil.copy(args.vlm_fill / name, stage_dir / "smolvlm2" / name)
     print(f"  action_expert <- {args.action_expert}")
     judge = None if args.no_judge_paths else args.judge_path
     return copy_action_expert(args.action_expert, stage_dir / "action_expert", judge)
 
 
-def check_tensors(stage_dir: Path, manifest: Path | None) -> tuple[list[str], list[str]]:
+def same_layers_as_demo(stage_dir: Path, demo_config: Path | None) -> bool:
+    """False when the policy keeps a different number of VLM layers than the demo (num_vlm_layers), so its tensor
+    names legitimately differ from the demo's."""
+    if demo_config is None or not demo_config.is_file():
+        return True
+    ours = json.loads((stage_dir / "action_expert" / "config.json").read_text()).get("num_vlm_layers")
+    demo = json.loads(demo_config.read_text()).get("num_vlm_layers")
+    return ours == demo
+
+
+def check_tensors(stage_dir: Path, manifest: Path | None,
+                  demo_config: Path | None = None) -> tuple[list[str], list[str]]:
     import torch
     from safetensors import safe_open
 
     errors, warnings = [], []
     expected = None
     if manifest is not None:
-        files = json.loads(manifest.read_text())["files"]
-        expected = files.get("action_expert/model.safetensors", {}).get("tensors")
+        if same_layers_as_demo(stage_dir, demo_config):
+            files = json.loads(manifest.read_text())["files"]
+            expected = files.get("action_expert/model.safetensors", {}).get("tensors")
+        else:
+            warnings.append("action_expert num_vlm_layers differs from the demo: tensor-name check vs the demo skipped")
 
-    for f in sorted(stage_dir.glob("*/*.safetensors")):
+    for f in sorted([*stage_dir.glob("*/*.safetensors"), *stage_dir.glob("weights/*/*.safetensors")]):
         rel = f.relative_to(stage_dir).as_posix()
         with safe_open(f, framework="pt") as sf:
             keys = set(sf.keys())
@@ -247,6 +408,9 @@ def parse_args(argv):
     ap.add_argument("--annotations", type=Path, required=True, help="the JSONL the VLM was trained on")
     ap.add_argument("--configs", type=Path, nargs="*", default=[], help="final SFT/VLA yaml files to include")
     ap.add_argument("--keep-fp32", action="store_true", help="copy smolvlm2 weights without bf16 conversion")
+    ap.add_argument("--vlm-fill", type=Path,
+                    help="take required smolvlm2 files missing from --vlm (e.g. tokenizer.json) from this dir, "
+                         "e.g. the final LLaMA-Factory checkpoint-<step>/")
     ap.add_argument("--force", action="store_true", help="overwrite an existing artifacts/<name>")
     ap.add_argument("--out-dir", type=Path, default=REPO / "artifacts")
     ap.add_argument("--code-dir", type=Path, default=REPO / "submission", help=argparse.SUPPRESS)
@@ -255,6 +419,15 @@ def parse_args(argv):
                     help="demo weight manifest for the tensor-name check; '' disables it")
     ap.add_argument("--no-judge-paths", action="store_true",
                     help="testing only: skip the path rewrite and the checks on it (negative control for verify)")
+    ap.add_argument("--demo-config", default=str(DEMO_AE_CONFIG), help=argparse.SUPPRESS)
+    gen = ap.add_argument_group("generator (offline finalist run)")
+    for flag, (hf_id, rel, bf16) in GEN_WEIGHTS.items():
+        gen.add_argument(f"--{flag}", type=Path, help=f"local {hf_id} snapshot dir -> {rel}{' (bf16)' if bf16 else ''}")
+    gen.add_argument("--da3-src", type=Path, help=f"dir holding the depth_anything_3 package -> {THIRD_PARTY}/")
+    gen.add_argument("--pydeps", type=Path, nargs="*", default=[],
+                     help=f"pure-Python package dirs missing from the judge image (addict) -> {THIRD_PARTY}/")
+    gen.add_argument("--allow-hub-refs", action="store_true",
+                     help="testing only: allow config.yaml model refs that are not shipped (HF ids)")
     args = ap.parse_args(argv)
 
     if args.from_dir is not None:
@@ -270,8 +443,22 @@ def parse_args(argv):
     for c in args.configs:
         if not c.is_file():
             ap.error(f"not a file: {c}")
+    for p in [*(getattr(args, f) for f in GEN_WEIGHTS), args.da3_src, *args.pydeps]:
+        if p is not None and not p.is_dir():
+            ap.error(f"not a directory: {p}")
+    if args.da3_src is not None and not (args.da3_src / "depth_anything_3").is_dir():
+        ap.error(f"no depth_anything_3 package in {args.da3_src}")
     args.manifest = Path(args.manifest) if args.manifest else None
+    args.demo_config = Path(args.demo_config) if args.demo_config else None
     return args
+
+
+def sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 24), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
 
 def main(argv=None) -> int:
@@ -297,8 +484,10 @@ def main(argv=None) -> int:
         e, w = check_staged(stage_dir, args.judge_path)
         errors += e
         warnings += w
+    ref_errors = check_config_refs(stage_dir)
+    (warnings if args.allow_hub_refs else errors).extend(ref_errors)
     print("checking tensors")
-    e, w = check_tensors(stage_dir, args.manifest)
+    e, w = check_tensors(stage_dir, args.manifest, args.demo_config)
     errors += e
     warnings += w
 
@@ -312,14 +501,17 @@ def main(argv=None) -> int:
 
     write_zip(stage_dir, zip_path)
     size = zip_path.stat().st_size
-    for part in ("smolvlm2", "action_expert"):
-        print(f"  {part:<14} {dir_size(stage_dir / part) / 1e9:.2f} GB")
-    print(f"  judge-path fields rewritten: {rewritten}")
-    print(f"wrote {zip_path} ({size / 1e9:.2f} GB)")
+    parts = ["smolvlm2", "action_expert", *sorted(p.relative_to(stage_dir).as_posix()
+                                                  for p in stage_dir.glob("weights/*") if p.is_dir()), "src"]
+    for part in parts:
+        print(f"  {part:<28} {dir_size(stage_dir / part) / 1e9:.3f} GB")
+    print(f"  judge-path fields rewritten: {rewritten}; config.yaml model refs rewritten: {args.config_refs_rewritten}")
+    print(f"wrote {zip_path} ({size / 1e9:.3f} GB, {size} bytes, limit {MAX_ZIP_BYTES})")
     if size > MAX_ZIP_BYTES:
         print(f"  ERROR: zip exceeds {MAX_ZIP_BYTES / 1e9:.0f} GB", file=sys.stderr)
         zip_path.unlink()
         return 1
+    print(f"sha256 {sha256(zip_path)}")
     print(f"next (on the GPU server host): tools/verify_submission.sh {zip_path.relative_to(REPO) if zip_path.is_relative_to(REPO) else zip_path} --libero")
     return 0
 
