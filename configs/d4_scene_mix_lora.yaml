@@ -15,7 +15,7 @@ vlm:
   # Not trained (--vlm-checkpoint), but run_pipeline.py still requires an existing ShareGPT file here.
   data_path: /data/gen/d4_mix/annotations.jsonl
   eval_data_path: null
-  media_dir: /data/gen
+  media_dir: /data/gen/d4_mix
 
 vla:
   suite: libero

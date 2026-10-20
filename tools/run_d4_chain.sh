@@ -39,7 +39,7 @@ gen() {
 mix() {
   python /repo/tools/build_sft_mix.py --scene /data/gen/scene14k/annotations.jsonl \
     --old /data/gen/d2_depth_phase/annotations.jsonl --depth 3000 --phase 1000 \
-    --media-root /data/gen --out /data/gen/d4_mix/annotations.jsonl
+    --out /data/gen/d4_mix/annotations.jsonl
 }
 train_full() {
   ln -sf /repo/configs/vlm_sft/d3_depth_phase_detection.yaml /workspace/configs/vlm_sft.yaml

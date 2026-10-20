@@ -1,7 +1,8 @@
 # d4: VLM SFT on the SAM 3 scene questions + some depth and phase questions, then VLA with the whole backbone
 # unfrozen, in one pipeline run.
 # Data: configs/gen_scene14k.yaml -> /data/gen/scene14k, mixed by tools/build_sft_mix.py (all scene questions,
-# 3000 depth_tier1 + 1000 phase_qa records of /data/gen/d2_depth_phase, A/B share capped at 27%) -> /data/gen/d4_mix.
+# 3000 depth_tier1 + 1000 phase_qa records of /data/gen/d2_depth_phase, A/B share capped at 27%) -> /data/gen/d4_mix,
+# with copies of its images in /data/gen/d4_mix/images/.
 # Templates linked in the dev container (tools/run_d4_chain.sh does all of this):
 #   ln -sf /repo/configs/vlm_sft/d3_depth_phase_detection.yaml /workspace/configs/vlm_sft.yaml
 #   ln -sf /repo/configs/vla/a1_full_unfreeze.yaml /workspace/configs/vla_libero.yaml
@@ -13,7 +14,7 @@ vlm:
   protocol: full                     # -> configs/vlm_sft.yaml, i.e. configs/vlm_sft/d3_depth_phase_detection.yaml
   data_path: /data/gen/d4_mix/annotations.jsonl
   eval_data_path: null
-  media_dir: /data/gen               # image paths in the mix are relative to it (scene14k/..., d2_depth_phase/...)
+  media_dir: /data/gen/d4_mix        # self-contained: the mix's images are copied to d4_mix/images/
 
 vla:
   suite: libero
