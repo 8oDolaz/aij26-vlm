@@ -1,0 +1,70 @@
+#!/usr/bin/env python3
+"""lerobot-train stand-in that adds LoRA (PEFT) to the kit's VLA training (configs/vla/a3_lora_vlm.yaml).
+
+The kit (scaling-lawyer vla.py) builds a fixed lerobot train config with no `peft` section and runs
+`lerobot-train --config_path=<json>`. With this directory first on PATH and VLA_PEFT_CONFIG=<VLA yaml with a `peft:`
+section>, a fresh run becomes:
+  1. a 1-step run of the same config saves the initial policy (SFT'd VLM + fresh expert) to
+     <output_dir>/../base_init: lerobot only wraps a policy with PEFT when it starts from a saved policy
+     (policy.pretrained_path); one step at warm-up LR leaves the weights as initialised;
+  2. the real lerobot-train runs the staged config + policy.pretrained_path=<base> + peft.
+Its checkpoints are PEFT adapters; tools/merge_vla_lora.py folds one back into a plain SmolVLA policy.
+Without VLA_PEFT_CONFIG, or for any other kind of call (resume, extra arguments), the real lerobot-train runs unchanged.
+"""
+import copy
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+import yaml
+
+HERE = Path(__file__).resolve().parent
+
+
+def real_lerobot_train() -> str:
+    for d in os.environ.get("PATH", "").split(os.pathsep):
+        cand = Path(d or ".") / "lerobot-train"
+        if cand.is_file() and os.access(cand, os.X_OK) and cand.resolve().parent != HERE:
+            return str(cand)
+    sys.exit("[peft-shim] no real lerobot-train on PATH")
+
+
+def main() -> None:
+    real = real_lerobot_train()
+    args = sys.argv[1:]
+    peft_yaml = os.environ.get("VLA_PEFT_CONFIG")
+    if not peft_yaml or len(args) != 1 or not args[0].startswith("--config_path="):
+        os.execv(real, [real, *args])
+    peft = (yaml.safe_load(Path(peft_yaml).read_text()) or {}).get("peft")
+    if not peft:
+        sys.exit(f"[peft-shim] no peft section in {peft_yaml}")
+
+    staged = Path(args[0].split("=", 1)[1])
+    cfg = json.loads(staged.read_text())
+    base_root = Path(cfg["output_dir"]).parent / "base_init"
+    bases = sorted(base_root.glob("checkpoints/*/pretrained_model"))
+    if not bases:
+        if base_root.exists():
+            sys.exit(f"[peft-shim] {base_root} exists without a checkpoint (failed earlier run?); remove it first")
+        base_cfg = copy.deepcopy(cfg)
+        base_cfg.update(output_dir=str(base_root), steps=1, save_freq=1, job_name=cfg["job_name"] + "-base")
+        base_json = staged.with_name(staged.stem + ".base.json")
+        base_json.write_text(json.dumps(base_cfg, indent=1))
+        print(f"[peft-shim] saving the initial policy (1 step) to {base_root}", flush=True)
+        subprocess.run([real, f"--config_path={base_json}"], check=True)
+        bases = sorted(base_root.glob("checkpoints/*/pretrained_model"))
+        if not bases:
+            sys.exit(f"[peft-shim] the 1-step run saved no checkpoint under {base_root}")
+
+    cfg["policy"]["pretrained_path"] = str(bases[-1])
+    cfg["peft"] = peft
+    peft_json = staged.with_name(staged.stem + ".peft.json")
+    peft_json.write_text(json.dumps(cfg, indent=1))
+    print(f"[peft-shim] LoRA run from {bases[-1]}: {peft_json}", flush=True)
+    os.execv(real, [real, f"--config_path={peft_json}"])
+
+
+if __name__ == "__main__":
+    main()

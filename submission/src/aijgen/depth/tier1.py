@@ -6,9 +6,7 @@ Per source frame (one moment of an episode): Depth Anything 3 on all of the data
 picked for the question (rotating over the views, so cameras are used evenly); SAM2.1 segments only that view, points
 are sampled per segment, and pairs are kept only when the normalised gap clears the threshold of their shortcut group
 and the order holds in the neighbouring frames; then balanced so "lower is closer" and the other shortcuts score
-about 50%. With depth_tier1.sets enabled, the same stable pairs also give 3-4 point sets ("which point is closest /
-farthest", the target beating every other member by such a pair), balanced so the shortcuts and every answer letter
-are at chance; question_mix sets the pair share next to them.
+about 50%.
 
 Writes to --output:
   annotations.jsonl       ShareGPT records ({"messages": [...], "images": [abs path]})
@@ -85,7 +83,7 @@ class Models:
     def get(self):
         if self.teacher is None:
             from aijgen.depth.models import DepthTeacher, Segmenter
-            self.teacher = DepthTeacher(self.cfg["depth_model"], self.cfg.get("da3_src"), self.cfg["da3_process_res"])
+            self.teacher = DepthTeacher(self.cfg["depth_model"], self.cfg.get("da3_src"), self.cfg.get("da3_process_res", 504))
             self.segmenter = Segmenter(self.cfg["segmenter"])
         return self.teacher, self.segmenter
 
@@ -135,9 +133,8 @@ def frame_data(key: str, eps: dict[str, Episode], fi: int, turn: int, ds: dict, 
 
 
 def collect(args, cfg, models: Models, funnel: Counter, timing: Counter):
-    """Filtered (not yet balanced) pairs and point sets per dataset, and per source frame its shape."""
-    by_dataset, sets_by_dataset, shapes = defaultdict(list), defaultdict(list), {}
-    sc = cfg.get("sets") or {}
+    """Filtered (not yet balanced) pairs per dataset, and per source frame its shape."""
+    by_dataset, shapes = defaultdict(list), {}
     lo, hi = cfg["frames_span"]
     for ds_name, ds in cfg["datasets"].items():
         root = args.input / ds_name
@@ -176,24 +173,14 @@ def collect(args, cfg, models: Models, funnel: Counter, timing: Counter):
                 else:
                     kept = found
                 funnel["pairs_pass_stability"] += len(kept)
-                sets = []
-                if sc.get("enabled"):
-                    # from every stable pair of the frame, before the per-frame pair cap below
-                    srng = rng_for(cfg["seed"], key, "sets")
-                    found_sets = [s for k in sc["sizes"] for relation in ("closest", "farthest")
-                                  for s in P.candidate_sets(kept, k, relation, dn.shape, cfg["pairs"], srng)]
-                    funnel["sets_candidates"] += len(found_sets)
-                    sets = P.per_frame_sets(found_sets, sc["max_per_frame"], sc["sizes"], sc["p_farthest"], srng)
-                    funnel["sets_after_frame_cap"] += len(sets)
                 kept = P.per_frame(kept, cfg["pairs"]["max_per_frame_per_group"], rng)
                 funnel["pairs_after_frame_cap"] += len(kept)
-                for p in kept + sets:
+                for p in kept:
                     p.update(frame=key, dataset=ds_name, camera=cam, views=views, episode=ep.index, frame_index=fi,
                              task=ep.task)
                 by_dataset[ds_name].extend(kept)
-                sets_by_dataset[ds_name].extend(sets)
                 shapes[key] = dn.shape
-    return by_dataset, sets_by_dataset, shapes
+    return by_dataset, shapes
 
 
 def colorize(dn: np.ndarray) -> np.ndarray:
@@ -236,7 +223,7 @@ def write_sheets(out: Path, samples: list[dict]):
         cap = np.zeros((40, tile.shape[1], 3), np.uint8)
         line1 = f"#{m['id']}  {m['dataset']}/{short(m['camera'])} ep{m['episode']} f{m['frame_index']}  " \
                 f"{m['group']} g={m['g']:.2f}{' bg' if m['background'] else ''}  DA3 views: {len(m['views'])}"
-        line2 = f"{m.get('relation', 'closer')}: {m['near']}   [{m['kind']}] answer: {s['answer'][:60]}"
+        line2 = f"closer: {m['near']}   [{m['kind']}] answer: {s['answer'][:60]}"
         cv2.putText(cap, line1, (6, 16), R.FONT, 0.45, (255, 255, 255), 1, cv2.LINE_AA)
         cv2.putText(cap, line2, (6, 34), R.FONT, 0.45, (255, 255, 0), 1, cv2.LINE_AA)
         tiles.append(np.vstack([cap, tile]))
@@ -263,22 +250,14 @@ def generate(args, cfg: dict) -> dict:
     funnel, timing = Counter(), Counter()
     t_start = time.perf_counter()
 
-    by_dataset, sets_by_dataset, shapes = collect(args, cfg, Models(cfg), funnel, timing)
+    by_dataset, shapes = collect(args, cfg, Models(cfg), funnel, timing)
 
-    bg_share = cfg["pairs"]["background_share"]
-    pairs, sets = [], []
+    selected = []
     for ds_name, found in by_dataset.items():
-        pairs += P.balance(found, bg_share, rng_for(cfg["seed"], ds_name, "balance"))
-    for ds_name, found in sets_by_dataset.items():
-        sets += P.balance_sets(found, bg_share, rng_for(cfg["seed"], ds_name, "balance_sets"))
-    mix = cfg.get("question_mix")
-    if sets and mix:  # every balanced set; pairs only up to their share of the mix
-        pairs = P.subsample(pairs, round(len(sets) * mix["pairs"] / mix["sets"]), rng_for(cfg["seed"], "mix"))
-    rng = rng_for(cfg["seed"], "letters")
-    P.assign_letters(pairs, rng)
-    P.assign_set_letters(sets, rng)
-    funnel["final_pairs"], funnel["final_sets"] = len(pairs), len(sets)
-    selected = pairs + sets
+        rng = rng_for(cfg["seed"], ds_name, "balance")
+        chosen = P.balance(found, cfg["pairs"]["background_share"], rng)
+        P.assign_letters(chosen, rng)
+        selected += chosen
     funnel["final"] = len(selected)
     order = rng_for(cfg["seed"], "order").permutation(len(selected))
     selected = [selected[i] for i in order]
@@ -286,30 +265,20 @@ def generate(args, cfg: dict) -> dict:
     frames_dir = args.output / "frames"
     shutil.rmtree(frames_dir, ignore_errors=True)
     rgb_cache, samples = {}, []
-    pc, sc = cfg["prompts"], cfg.get("sets") or {}
+    pc = cfg["prompts"]
     with open(args.output / "annotations.jsonl", "w") as fa, open(args.output / "annotations.meta.jsonl", "w") as fm:
         for n, p in enumerate(selected):
-            is_set = "points" in p
-            segs = [q["seg"] for q in p["points"]] if is_set else [p["near"]["seg"], p["far"]["seg"]]
-            rng = rng_for(cfg["seed"], p["frame"], *segs, "render")
+            rng = rng_for(cfg["seed"], p["frame"], p["near"]["seg"], p["far"]["seg"], "render")
             if p["frame"] not in rgb_cache:
                 rgb_cache = {p["frame"]: cv2.cvtColor(cv2.imread(str(args.output / "cache" / f"{p['frame']}.jpg")),
                                                       cv2.COLOR_BGR2RGB)}
             img, s = R.resize_width(rgb_cache[p["frame"]], cfg["render_width"])
+            a, b = P.points_ab(p)
+            drawn = {"A": (round(a["x"] * s), round(a["y"] * s)), "B": (round(b["x"] * s), round(b["y"] * s))}
             style = "dot" if rng.random() < pc["p_dot"] else "ring"
             color = R.DOT_COLORS[rng.integers(len(R.DOT_COLORS))] if style == "dot" else R.RED
-            if is_set:
-                prompt, answer, kind, labels = R.set_question(p["k"], p["slot"], p["opt_slot"], p["relation"], style,
-                                                              sc["p_numbered"], rng)
-                drawn = {L: (round(q["x"] * s), round(q["y"] * s)) for L, q in zip(labels, p["points"])}
-                near, p["group"] = labels[p["slot"]], f"set{p['k']}_{p['relation']}"
-                extra = {"points": p["points"], "target": p["slot"], "relation": p["relation"], "k": p["k"]}
-            else:
-                a, b = P.points_ab(p)
-                drawn = {"A": (round(a["x"] * s), round(a["y"] * s)), "B": (round(b["x"] * s), round(b["y"] * s))}
-                near = "A" if p["a_is_near"] else "B"
-                prompt, answer, kind = R.question(near, style, pc, rng)
-                extra = {"A": a, "B": b}
+            near = "A" if p["a_is_near"] else "B"
+            prompt, answer, kind = R.question(near, style, pc, rng)
             path = (frames_dir / f"{p['frame']}_{short(p['camera'])}_{n:06d}.jpg").resolve()
             path.parent.mkdir(parents=True, exist_ok=True)
             cv2.imwrite(str(path), cv2.cvtColor(R.draw(img, drawn, style, color), cv2.COLOR_RGB2BGR),
@@ -318,11 +287,11 @@ def generate(args, cfg: dict) -> dict:
                                               {"role": "assistant", "content": answer}],
                                  "images": [str(path)]}) + "\n")
             meta = {"id": n, "frame": p["frame"], "dataset": p["dataset"], "camera": p["camera"], "views": p["views"],
-                    "episode": p["episode"], "frame_index": p["frame_index"], "task": p["task"], **extra,
+                    "episode": p["episode"], "frame_index": p["frame_index"], "task": p["task"], "A": a, "B": b,
                     "drawn": drawn, "near": near, "g": p["g"], "group": p["group"], "background": p["background"],
                     "style": style, "kind": kind}
             fm.write(json.dumps(meta) + "\n")
-            p["kind"], p["style"], p["answer"] = kind, style, answer
+            p["kind"], p["style"] = kind, style
             samples.append({"meta": meta, "image": str(path), "answer": answer})
 
     sheet_ids = sorted(rng_for(cfg["seed"], "sheets").choice(len(samples), min(SHEET_SAMPLES, len(samples)),
@@ -330,8 +299,6 @@ def generate(args, cfg: dict) -> dict:
     if samples:
         write_sheets(args.output, [samples[i] for i in sheet_ids])
 
-    n_frames = max(funnel["frames"] - funnel["frames_missing_or_blank"], 1)
-    letters = Counter(p["answer"] if len(p["answer"]) == 1 else "free-form" for p in selected)
     report = {
         "funnel": dict(funnel),
         "candidates_by_dataset_group": {ds: dict(Counter(p["group"] for p in found))
@@ -340,22 +307,17 @@ def generate(args, cfg: dict) -> dict:
         "final_by_camera": dict(Counter(p["camera"] for p in selected)),
         "final_by_group": dict(Counter(p["group"] for p in selected)),
         "background_share": round(float(np.mean([p["background"] for p in selected])), 3) if selected else None,
-        "point_kinds": dict(Counter(q["kind"] for p in selected
-                                    for q in (p["points"] if "points" in p else (p["near"], p["far"])))),
+        "point_kinds": dict(Counter(q["kind"] for p in selected for q in (p["near"], p["far"]))),
         "prompt_kinds": dict(Counter(p["kind"] for p in selected)),
         "styles": dict(Counter(p["style"] for p in selected)),
-        # share of each answer over all records; free-form answers are the pair prompts' sentences and yes/no
-        "answer_letters": {k: round(v / max(len(selected), 1), 3) for k, v in sorted(letters.items())},
-        "shortcut_audit": P.audit(pairs, lambda p: shapes[p["frame"]]),
-        "shortcut_audit_by_dataset": {ds: P.audit([p for p in pairs if p["dataset"] == ds],
+        "shortcut_audit": P.audit(selected, lambda p: shapes[p["frame"]]),
+        "shortcut_audit_by_dataset": {ds: P.audit([p for p in selected if p["dataset"] == ds],
                                                   lambda p: shapes[p["frame"]]) for ds in by_dataset},
-        "set_audit_by_k": {k: P.audit_sets([s for s in sets if s["k"] == k], lambda p: shapes[p["frame"]])
-                           for k in sorted({s["k"] for s in sets})},
         "g_quantiles_by_group": {g: [round(float(x), 3) for x in np.quantile([p["g"] for p in selected
                                                                                if p["group"] == g], (0.1, 0.5, 0.9))]
-                                 for g in sorted({p["group"] for p in selected})},
-        "pairs_per_100_frames": round(100 * len(pairs) / n_frames, 1),
-        "sets_per_100_frames": round(100 * len(sets) / n_frames, 1),
+                                 for g in P.GROUPS if any(p["group"] == g for p in selected)},
+        "pairs_per_100_frames": round(100 * len(selected) / max(funnel["frames"] - funnel["frames_missing_or_blank"],
+                                                                1), 1),
         "timing": {"total_s": round(time.perf_counter() - t_start, 1),
                    "frames_computed": timing["frames_computed"],
                    "depth_s_per_frame": round(timing["depth_s"] / max(timing["frames_computed"], 1), 3),

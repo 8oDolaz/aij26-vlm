@@ -1,0 +1,79 @@
+# Bridge Dataset Scene Objects Vocabulary
+# Extracted and normalized from 22,198 prompts in prompts_bridge.txt
+# One object category per line. You can edit, add, or remove items.
+
+# Cookware & Tableware
+pot
+pan
+lid
+bowl
+plate
+cup
+glass
+spoon
+fork
+knife
+spatula
+ladle
+colander
+cooker
+
+# Produce & Food
+eggplant
+pepper
+banana
+apple
+carrot
+corn
+potato
+tomato
+cucumber
+mushroom
+broccoli
+strawberry
+sushi
+egg
+bread
+croissant
+cheese
+orange
+
+# Cleaning & Textiles
+cloth
+towel
+sponge
+napkin
+rag
+brush
+
+# Containers, Fixtures & Appliances
+can
+bottle
+box
+basket
+container
+bag
+chip bag
+sink
+burner
+stove
+drawer
+microwave
+hole
+
+# Toys, Shapes & Blocks
+block
+cube
+triangle
+circle
+star
+hexagon
+heart
+rectangle
+cylinder
+ball
+toy
+duck
+figure
+
+
