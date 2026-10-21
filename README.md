@@ -1,10 +1,14 @@
 # AIJ 2026 Task 4: Vision-Action Data Factory
 
-Our entry for the AIJ 2026 robotics track. A generator turns raw robot episodes (Bridge, Fractal) into ~14k
+Repository of the **./lab_449** team for the AIJ 2026 robotics track. A generator turns raw robot episodes (Bridge, Fractal) into ~14k
 ShareGPT VQA records aimed at what the VLM benchmarks test. That data fine-tunes SmolVLM2-500M, and the fine-tuned
 VLM then initialises a SmolVLA policy trained on LIBERO.
 
 The submitted version is on `main`; `submission/README.md` describes it in detail (sources, models, how to reproduce).
+
+On the public leaderboard ./lab_449 placed 8th with 57.11, using 3 submissions:
+
+![Public leaderboard](docs/img/public_leaderboard.png)
 
 ## Generator
 
