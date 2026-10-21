@@ -1,0 +1,30 @@
+# Objects that should never be in a Bridge frame (toy kitchens, toy sinks, lab tabletops, a washing machine).
+# Source of "absent" answers for MSMU-style existence questions ("How tall is the piano?" -> "No piano in the scene.").
+# A name is only used on a frame after SAM 3 confirms it there (presence below scene.absent_presence and no box at or
+# above filter.uncertain), so a wrong entry costs questions, not labels.
+# Left out on purpose: toys and things Bridge has as toys (animals, balls, dolls), anything that may stand in the lab
+# background (chairs, monitors, laptops, plants, shoes, bags), and names sharing a last word with bridge.txt.
+# One name per line.
+bicycle
+car
+motorcycle
+bed
+sofa
+toilet
+bathtub
+umbrella
+suitcase
+guitar
+piano
+traffic cone
+fire hydrant
+ladder
+christmas tree
+bookshelf
+television
+printer
+vacuum cleaner
+skateboard
+surfboard
+tennis racket
+helmet

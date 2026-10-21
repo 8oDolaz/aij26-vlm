@@ -1,0 +1,23 @@
+# d2: SFT on ~9k depth-tier1 (pairs + 3-4 point sets, Bridge) + >= 10k gripper-phase questions (Bridge + Fractal).
+# Data: configs/gen_d2_depth_phase.yaml -> /data/gen/d2_depth_phase.
+# Train (VLM only), inside the dev container (docker compose exec dev bash), with the d2 SFT template linked:
+#   ln -sf /repo/configs/vlm_sft/d2_depth_phase.yaml /workspace/configs/vlm_sft.yaml
+#   cd /workspace && FORCE_TORCHRUN=1 PYTORCH_ALLOC_CONF=expandable_segments:True \
+#     ./scripts/run_pipeline.sh /repo/configs/d2_depth_phase.yaml --skip-vla > /repo/runs/d2_logs/d2_depth_phase_train.log 2>&1
+run_name: d2_depth_phase
+
+vlm:
+  protocol: full                     # -> configs/vlm_sft.yaml, i.e. configs/vlm_sft/d2_depth_phase.yaml linked over it
+  data_path: /data/gen/d2_depth_phase/annotations.jsonl
+  eval_data_path: null
+  media_dir: /data/gen/d2_depth_phase   # image paths in the JSONL are relative to it
+
+vla:
+  suite: libero
+  dataset_dir: /data/vla     # HuggingFaceVLA/libero @ v3.0; kit default vla_libero.yaml
+
+runtime:
+  gpu_indices: [0]
+  output_root: /repo/runs
+  cache_dir: /repo/runs/cache/core
+  lerobot_home: /repo/runs/cache/lerobot

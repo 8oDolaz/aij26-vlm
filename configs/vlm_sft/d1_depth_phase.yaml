@@ -1,0 +1,53 @@
+
+### model
+# d1_depth_phase SFT: the kit's full template (vendor/participant/configs/vlm_sft.yaml) with changes marked CHANGED.
+# Symlinked over /workspace/configs/vlm_sft.yaml in the dev container, see configs/d1_depth_phase.yaml.
+# Sized for ONE 32 GB GPU (RTX 5090): effective batch = 4 per GPU x 8 accumulation x 1 GPU = 32.
+# On N GPUs divide gradient_accumulation_steps by N to keep the batch at 32.
+model_name_or_path: HuggingFaceTB/SmolVLM2-500M-Video-Instruct
+image_max_pixels: 822816
+video_max_pixels: 16384
+video_fps: 2.0
+video_maxlen: 64
+trust_remote_code: true
+flash_attn: disabled
+
+### method
+stage: sft
+do_train: true
+do_eval: false
+finetuning_type: full
+freeze_vision_tower: false
+freeze_multi_modal_projector: true
+disable_gradient_checkpointing: false
+# deepspeed path is injected by the pipeline (absolute path to LLaMA-Factory)
+
+### dataset
+# dataset / dataset_dir / output_dir are injected by the pipeline
+template: smolvlm2
+cutoff_len: 4096
+overwrite_cache: true
+preprocessing_num_workers: 16
+dataloader_num_workers: 4
+
+### output
+logging_steps: 10
+save_strategy: steps
+save_steps: 200                  # CHANGED from 500: a run is only ~285 optimizer steps (9112 records / 32)
+plot_loss: true
+overwrite_output_dir: true
+save_only_model: false
+report_to: none
+
+### train
+seed: 42
+per_device_train_batch_size: 4   # CHANGED from 8: 8 runs out of memory on one 32 GB GPU (ZeRO-2 has no 2nd GPU to shard to)
+gradient_accumulation_steps: 8   # CHANGED from 14: effective batch 4 x 8 x 1 GPU = 32, ~285 steps for 9112 records
+learning_rate: 1.0e-5
+num_train_epochs: 1.0
+warmup_ratio: 0.03
+lr_scheduler_type: cosine
+weight_decay: 0.01
+max_grad_norm: 1.0
+bf16: true
+ddp_timeout: 180000000

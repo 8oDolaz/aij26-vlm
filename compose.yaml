@@ -1,0 +1,38 @@
+# Long-lived dev container on the GPU server: start once, then shell in.
+#   cp .env.example .env && mkdir -p data runs
+#   docker compose up -d --build     # first build is long (CUDA 12.8 + torch + hf-libero)
+#   docker compose exec dev bash
+# Image: the organizers' vendor/participant/Dockerfile, unchanged. Runs as root, like the kit expects.
+# The kit lives in the image at /workspace; your repo is mounted at /repo.
+services:
+  dev:
+    build: ./vendor/participant
+    image: aij-robotics:latest
+    container_name: aij-dev
+    hostname: aij-dev
+    init: true
+    working_dir: /repo
+    command: ["sleep", "infinity"]
+    environment:
+      CUDA_HOME: /usr/local/cuda
+      MUJOCO_GL: egl
+      # "graphics" is needed for EGL rendering in LIBERO; the CUDA base image only enables compute,utility.
+      NVIDIA_DRIVER_CAPABILITIES: all
+      NVIDIA_VISIBLE_DEVICES: ${GPUS:-all}
+    volumes:
+      # Whole repo, read-write: edit on the host or inside, both see the same files.
+      - .:/repo
+      # Datasets: kit configs use /data/vlm and /data/vla.
+      - ${DATA_DIR:-./data}:/data
+      - ${HF_CACHE:-~/.cache/huggingface}:/root/.cache/huggingface
+    shm_size: 16gb
+    ulimits:
+      memlock: -1
+      stack: 67108864
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

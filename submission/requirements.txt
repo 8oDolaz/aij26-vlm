@@ -1,3 +1,21 @@
-# Optional participant deps (ignored by judge metrics).
-torch
-transformers
+# Generator dependencies. All of them except addict are already in the organizers' image
+# (vendor/participant/Dockerfile: aij-robotics), at these versions; the generator was run and checked offline there.
+torch==2.10.0
+torchvision==0.25.0
+transformers==5.3.0          # SAM 3 (Sam3Model) and SAM 2.1 (mask-generation pipeline)
+huggingface-hub==1.27.0
+safetensors==0.8.0
+omegaconf==2.3.1             # Depth Anything 3 config system
+einops==0.8.2
+opencv-python-headless==5.0.0.93
+av==15.1.0                   # LeRobot video decoding
+pyarrow==25.0.0
+pandas
+numpy
+pillow
+imageio
+tqdm
+PyYAML==6.0.3
+# Vendored in the ZIP, no install needed (src/third_party/ is put on sys.path with the DA3 source):
+addict==2.4.0
+# Depth Anything 3 code: src/third_party/depth_anything_3, github.com/ByteDance-Seed/Depth-Anything-3 @ 3d835ec

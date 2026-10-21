@@ -1,0 +1,28 @@
+# a1: VLA stage only, on top of an existing SFT'd VLM, with the whole backbone unfrozen (configs/vla/a1_full_unfreeze.yaml).
+# Needs LIBERO v3.0 at /data/vla (hf download HuggingFaceVLA/libero --repo-type dataset --revision v3.0 --local-dir /data/vla).
+# Run inside the dev container (docker compose exec dev bash), with the a1 VLA template linked over the kit default:
+#   ln -sf /repo/configs/vla/a1_full_unfreeze.yaml /workspace/configs/vla_libero.yaml
+#   mkdir -p /repo/runs/a1_logs && cd /workspace && PYTORCH_ALLOC_CONF=expandable_segments:True \
+#     ./scripts/run_pipeline.sh /repo/configs/a1_full_unfreeze.yaml \
+#       --vlm-checkpoint /repo/runs/d2_depth_phase/vlm/checkpoints > /repo/runs/a1_logs/a1_full_unfreeze_train.log 2>&1
+# --vlm-checkpoint picks the backbone (swap in the VLM under test) and skips VLM SFT.
+# Self-check afterwards (>= 5 episodes per task):
+#   cd /workspace && SUITE=libero_spatial N_EPISODES=5 ./scripts/run_libero_selfcheck.sh /repo/runs/a1_full_unfreeze/submission
+run_name: a1_full_unfreeze           # output dir /repo/runs/a1_full_unfreeze must not exist yet (resume is false)
+
+vlm:
+  protocol: full
+  # Not trained with --vlm-checkpoint, but run_pipeline.py still requires an existing ShareGPT file here.
+  data_path: /data/gen/d2_depth_phase/annotations.jsonl
+  eval_data_path: null
+  media_dir: /data/gen/d2_depth_phase
+
+vla:
+  suite: libero
+  dataset_dir: /data/vla             # HuggingFaceVLA/libero @ v3.0, all 1693 episodes
+
+runtime:
+  gpu_indices: [0]                # 2 GPUs -> accelerate DDP in bf16, effective batch 8; leave headroom for the colleague's 10 GB
+  output_root: /repo/runs
+  cache_dir: /repo/runs/cache/core
+  lerobot_home: /repo/runs/cache/lerobot
