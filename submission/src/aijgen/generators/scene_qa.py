@@ -23,6 +23,7 @@ from aijgen.scene import detect as D
 from aijgen.scene.templates import build_scene, make_items
 from aijgen.scene.vocab import DICT_DIR, load_dictionary, load_names
 
+
 class SceneQAGenerator(Generator):
     name = "scene_qa"
 

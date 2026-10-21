@@ -73,7 +73,7 @@ class PhaseGenerator(Generator):
             duration = (end - start + 1) / fps          # seconds
             if duration < self.min_phase_seconds:
                 continue
-            
+
             extra = {}
             if phase == "post_grasp":
                 # releasing is visible only once the gripper is open and the arm has moved off the object

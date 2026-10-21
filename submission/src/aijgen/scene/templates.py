@@ -37,7 +37,6 @@ class Scene:
     subjects: list[Obj] = field(default_factory=list)
     counts: dict[str, int] = field(default_factory=dict)
     absent: list[str] = field(default_factory=list)
-    occupied: list[list[float]] = field(default_factory=list)  # every box >= filter.uncertain, any name
 
 
 @dataclass
@@ -58,7 +57,7 @@ def build_scene(det: FrameDetections, entries: dict[str, Entry], p, exclude_subj
                             entries, h * w, p)
     kept, contested = sel["kept"], sel["ambiguous"]
     maybe = [b for b in dict_boxes if b.score >= p.uncertain]
-    scene = Scene((h, w), occupied=[list(b.box) for b in det.boxes if b.score >= p.uncertain])
+    scene = Scene((h, w))
     scene.objects = [Obj(c["name"], list(c["box"]), c["score"], c["raw"].mask, c["raw"].disp) for c in kept]
 
     for c, obj in zip(kept, scene.objects):
@@ -87,9 +86,7 @@ def build_scene(det: FrameDetections, entries: dict[str, Entry], p, exclude_subj
     return scene
 
 
-# ---------------------------------------------------------------------------------------------------------------------
 # Relations: EmbSpatial (Q23), BLINK Spatial Relation (Q15), MSMU Relative Position (Q34)
-# ---------------------------------------------------------------------------------------------------------------------
 EMB_RELATION = {"left": ["left of", "on the left side of", "at the left side of"],
                 "right": ["right of", "on the right side of", "at the right side of"],
                 "above": ["above"],
@@ -178,9 +175,7 @@ def relation_msmu(scene, rng, cfg):
     return items
 
 
-# ---------------------------------------------------------------------------------------------------------------------
 # Closest / farthest among named objects: EmbSpatial Close / Far (Q24, Q25)
-# ---------------------------------------------------------------------------------------------------------------------
 CLOSE_Q = [
     "Among the listed objects, which one is closest to your current location in the image?",
     "From your viewpoint, which object among the options is the nearest within the image?",
@@ -230,9 +225,7 @@ def far_embspatial(scene, rng, cfg):
     return items
 
 
-# ---------------------------------------------------------------------------------------------------------------------
 # Pointing: ERQA "four dots, which is on X" (Q12)
-# ---------------------------------------------------------------------------------------------------------------------
 DOT_COLORS = {"red": (230, 30, 30), "green": (40, 180, 60), "blue": (40, 90, 235), "yellow": (250, 215, 0),
               "purple": (150, 60, 200), "cyan": (0, 200, 220)}
 POINT_COLOR_Q = ["There are four points marked with colors, which one is on the {name}.",
@@ -302,9 +295,7 @@ def pointing_erqa(scene, rng, cfg):
     return items
 
 
-# ---------------------------------------------------------------------------------------------------------------------
 # BLINK Object Localization: "which box encloses X" (Q16)
-# ---------------------------------------------------------------------------------------------------------------------
 BOX_COLORS = [(230, 30, 30), (40, 180, 60), (40, 90, 235), (250, 215, 0), (150, 60, 200)]
 
 
@@ -328,9 +319,7 @@ def localization_blink(scene, rng, cfg):
     return items
 
 
-# ---------------------------------------------------------------------------------------------------------------------
 # MSMU existence (Q31): questions about an absent object, answered "No X in the scene."
-# ---------------------------------------------------------------------------------------------------------------------
 ABSENT_Q = ["How tall is {n}?", "What is the height of {n}?", "Where is {n}?", "What is the size of {n}?",
             "what's the total number of {pl} in the image?"]
 ABSENT_A = ["No {n} in the scene.", "Can not find {n}."]
@@ -364,9 +353,7 @@ def existence_msmu(scene, rng, cfg):
     return items
 
 
-# ---------------------------------------------------------------------------------------------------------------------
 # Counting: BLINK (Q13, 4 numeric options) and MSMU (Q32, free-form number)
-# ---------------------------------------------------------------------------------------------------------------------
 def _count_names(scene, rng, cfg):
     names = sorted(scene.counts)
     return [names[i] for i in rng.permutation(len(names))[:cfg.get("per_frame", 1)]]

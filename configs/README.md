@@ -1,8 +1,10 @@
 # Configs
 
-Our experiment configs. Start from the kit defaults in `vendor/participant/configs/`
-(`vlm_sft.yaml`, `vlm_sft.lora.yaml`, `vla_libero.yaml`) and save each variant here
-with a name that matches its row in `docs/experiments.md`.
+Experiment configs. Training ones start from the kit defaults in `vendor/participant/configs/`.
 
-- `vlm_sft/`: LLaMA-Factory SFT configs (Track B)
-- `vla/`: SmolVLA LIBERO configs (Track A), e.g. `a0_default.yaml`, `a1_unfreeze_vlm.yaml`
+- `gen_*.yaml`: generator configs (`submission/generate_dataset.py --config`)
+- `d*.yaml`, `a1_*.yaml`, `selfcheck_*.yaml`, `smoke.yaml`: kit pipeline runs (`run_pipeline.sh <config>`)
+- `vlm_sft/`: LLaMA-Factory SFT configs for SmolVLM2
+- `vla/`: SmolVLA LIBERO configs
+
+The submitted model used `d4_scene_mix.yaml` with `vlm_sft/d3_depth_phase_detection.yaml` and `vla/a4_full_transforms.yaml`.

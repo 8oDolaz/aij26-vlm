@@ -80,7 +80,7 @@ SOURCES = {
 }
 
 
-# metadata part
+# Metadata
 
 def _flat(arr, n: int) -> np.ndarray:
     """A (possibly nested) list column -> (n, k) float array."""
@@ -164,7 +164,7 @@ def usable_mask(ep: dict, act_ids: np.ndarray, active: np.ndarray, src: Source) 
     return (ep["task"] != "") & (ep["length"] >= src.min_len) & on
 
 
-# files selection
+# File selection
 
 def select_files(primary: np.ndarray, tasks: np.ndarray, usable: np.ndarray, multiview: np.ndarray,
                  extra: list[set], sizes: dict[str, int], budget: int, mv_share: float = 0.0) -> list[str]:
@@ -205,7 +205,7 @@ def _greedy(cands: dict, sizes: dict[str, int], budget: int, state: dict, w_ep: 
         state["spent"] += best_c
 
 
-# actual download
+# Download
 
 def video_sizes(src: Source, video_keys: list[str]) -> dict[str, int]:
     from huggingface_hub import HfApi

@@ -4,25 +4,23 @@ python3 tools/explore_episode.py --data data/raw/bridge --out data/explore --epi
 """
 import argparse
 import glob
+import json
 import shutil
 import sys
 from pathlib import Path
-import json
 
 import av
+import matplotlib
 import numpy as np
 import pandas as pd
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 from PIL import Image
 
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt  # noqa: E402
 
-
-REPO = Path(__file__).resolve().parents[1]  
+REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "submission" / "src"))
-
-from aijgen import phases as ph
+from aijgen import phases as ph  # noqa: E402
 
 FPS = 5
 CAMS = ["image_0", "image_1", "image_2", "image_3"]
@@ -31,9 +29,7 @@ PHASE_COLORS = {"pre_grasp": "#9ecae1", "immobilization": "#fdae6b", "contact": 
 
 
 def load_meta_episodes(root: Path) -> pd.DataFrame:
-    '''
-    return: table of all /meta
-    '''
+    """All rows of meta/episodes/*.parquet as one table."""
     files = sorted(glob.glob(str(root / "meta/episodes/**/*.parquet"), recursive=True))
     return pd.concat([pd.read_parquet(f) for f in files], ignore_index=True)
 

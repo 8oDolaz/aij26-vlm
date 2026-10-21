@@ -1,7 +1,7 @@
 """All question generators and how to build them from config.yaml."""
 from pathlib import Path
 
-from aijgen.generators.base import Episode, Generator, Question
+from aijgen.generators.base import Generator
 from aijgen.generators.phase_qa import PhaseGenerator
 from aijgen.generators.scene_qa import SceneQAGenerator
 
