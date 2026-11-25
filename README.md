@@ -6,9 +6,9 @@ VLM then initialises a SmolVLA policy trained on LIBERO.
 
 The submitted version is on `main`; `submission/README.md` describes it in detail (sources, models, how to reproduce).
 
-On the public leaderboard ./lab_449 placed 8th with 57.11, using 3 submissions:
+On the final leaderboard ./lab_449 placed 8th:
 
-![Public leaderboard](docs/img/public_leaderboard.png)
+![Final leaderboard](docs/img/final_leaderboard.png)
 
 ## Generator
 
