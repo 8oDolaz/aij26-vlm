@@ -45,34 +45,31 @@ class Episode:
 
 
 def stable_id(s: str) -> int:
-    """Deterministic integer for a string (seeds for datasets)"""
+    """Deterministic integer for a string (seeds for datasets)."""
     return zlib.crc32(s.encode("utf-8"))
 
 
-def pick_frame(start: int, 
-               end: int, 
-               rng: np.random.Generator,
-               frame_range: tuple[float, float]) -> int:
+def pick_frame(start: int, end: int, rng: np.random.Generator, frame_range: tuple[float, float]) -> int:
     """Random frame in the run [start, end] (end inclusive), restricted to frame_range fractions."""
     span = end - start
-    low_bound = start + math.ceil(frame_range[0] * span)
-    hight_bound = start + math.floor(frame_range[1] * span)
-    if low_bound > hight_bound:                                 
+    lo = start + math.ceil(frame_range[0] * span)
+    hi = start + math.floor(frame_range[1] * span)
+    if lo > hi:
         return (start + end) // 2
-    return int(rng.integers(low_bound, hight_bound + 1))
+    return int(rng.integers(lo, hi + 1))
 
 
 class Generator(ABC):
     """Base class. Subclasses set `name` and implement `generate`."""
 
-    name: str = ""                            
+    name: str = ""
 
     def __init__(self, cfg: dict):
-        self.cfg = cfg 
-        self.seed = int(cfg["seed"])                       
+        self.cfg = cfg
+        self.seed = int(cfg["seed"])
 
     def rng(self, ep: Episode) -> np.random.Generator:
-        """Own random stream per (seed, dataset, episode, generator)"""
+        """Own random stream per (seed, dataset, episode, generator)."""
         return np.random.default_rng([self.seed, stable_id(ep.dataset), ep.index, stable_id(self.name)])
 
     @abstractmethod
@@ -86,10 +83,7 @@ class Generator(ABC):
         return self.generate(ep, self.rng(ep))
 
     @staticmethod
-    def mcq(question: str, 
-            correct: str,
-            distractors: list[str],
-            rng: np.random.Generator) -> tuple[str, str]:
+    def mcq(question: str, correct: str, distractors: list[str], rng: np.random.Generator) -> tuple[str, str]:
         """Shuffle options, return (question with lettered options + instructions, correct letter)."""
         options = [correct, *distractors]
         options = [options[i] for i in rng.permutation(len(options))]

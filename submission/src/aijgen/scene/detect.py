@@ -29,9 +29,7 @@ RAW_MIN_SCORE = 0.05  # boxes kept in the raw answers and the cache
 CACHE_VERSION = 1
 
 
-# ---------------------------------------------------------------------------------------------------------------------
 # Box filtering
-# ---------------------------------------------------------------------------------------------------------------------
 @dataclass
 class FilterParams:
     threshold: float = 0.85    # min box score (confidence x presence)
@@ -103,9 +101,7 @@ def select(answers: dict, names: list[str], entries: dict[str, Entry], frame_are
     return select_candidates(cands, entries, frame_area, p)
 
 
-# ---------------------------------------------------------------------------------------------------------------------
 # Per-frame detections and their cache
-# ---------------------------------------------------------------------------------------------------------------------
 @dataclass
 class RawBox:
     name: str
@@ -185,9 +181,7 @@ def load(path: Path) -> FrameDetections | None:
                            meta["params"])
 
 
-# ---------------------------------------------------------------------------------------------------------------------
 # Model
-# ---------------------------------------------------------------------------------------------------------------------
 class Sam3:
     """facebook/sam3 via transformers (5.3.0 in the organizers' image). model_id may be a local directory."""
 

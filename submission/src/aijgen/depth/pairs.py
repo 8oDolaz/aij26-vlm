@@ -193,7 +193,7 @@ def subsample(pairs: list[dict], n: int, rng: np.random.Generator) -> list[dict]
     return out
 
 
-# ---- point sets: "which of these k points is closest / farthest" -------------------------------------------------
+# Point sets: "which of these k points is closest / farthest"
 
 def _key(q: dict) -> tuple[int, int]:
     return q["y"], q["x"]

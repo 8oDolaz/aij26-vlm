@@ -1,30 +1,56 @@
 # AIJ 2026 Task 4: Vision-Action Data Factory
 
-`generate_dataset.py` turns Bridge / Fractal / Language Table / Egocentric-100K into a ShareGPT JSONL. That data is used to SFT SmolVLM2-500M, which then initializes a SmolVLA policy trained on LIBERO.
-See [docs/PLAN.md](docs/PLAN.md) for the strategy and [docs/experiments.md](docs/experiments.md) for results.
+Repository of the **./lab_449** team for the AIJ 2026 robotics track. A generator turns raw robot episodes (Bridge, Fractal) into ~14k
+ShareGPT VQA records aimed at what the VLM benchmarks test. That data fine-tunes SmolVLM2-500M, and the fine-tuned
+VLM then initialises a SmolVLA policy trained on LIBERO.
+
+The submitted version is on `main`; `submission/README.md` describes it in detail (sources, models, how to reproduce).
+
+On the final leaderboard **./lab_449 placed 5th**:
+
+![Final leaderboard](docs/img/final_leaderboard.png)
+
+## Generator
+
+`submission/generate_dataset.py` runs three sources, set up in `submission/config.yaml`:
+
+| Source | Questions | Models |
+|---|---|---|
+| `scene_qa` | object relations, closest/farthest object, pointing, box localisation, existence, counting | SAM 3 + Depth Anything 3 |
+| `depth_tier1` | BLINK-style "which point is closer" pairs and 3–4 point sets | Depth Anything 3 + SAM 2.1 |
+| `phase_qa` | grasp phase, from the measured gripper state | none |
+
+Each source is capped, answer letters are balanced, and everything is seeded, so the same inputs give the same output.
 
 ## Layout
 
-| Path | What | In git |
-|---|---|---|
-| `submission/` | **The deliverable**: exactly the code that goes into the ZIP. Must be self-contained (no imports from `tools/` or `vendor/`). | code yes, weights no |
-| `configs/` | Our SFT / VLA experiment configs (overrides of `vendor/participant/configs/`) | yes |
-| `tools/` | Dev-only scripts (packing, data fetch, eval reports). Never shipped. | yes |
-| `tests/` | Determinism and packaging checks | yes |
-| `docs/` | Plan, experiment log, research notes, organizer rules and Q&A | yes |
-| `vendor/participant/` | Organizer training/eval kit (LLaMA-Factory, scaling-lawyer, lmms-eval overlay) | yes, committed as-is first; patches show as diffs |
-| `vendor/baseline/` | Organizer baseline data pipeline (MIT), for reference and copying | yes |
-| `vendor/demo_submission/` | Demo submission configs + weight manifest (no weights) | yes |
-| `data/` | Raw dataset subsets, generated JSONL and frames | no |
-| `runs/` | SFT / VLA checkpoints, eval logs | no |
-| `artifacts/` | Demo weights (`artifacts/demo_submission/`), built ZIPs | no |
+| Path | What |
+|---|---|
+| `submission/` | the deliverable: generator code and config, self-contained (no imports from `tools/` or `vendor/`) |
+| `configs/` | generator, VLM SFT (`vlm_sft/`) and VLA (`vla/`) experiment configs |
+| `tools/` | dev scripts: data download, packing and offline verification, inspection probes (see `tools/README.md`) |
+| `tests/` | unit tests for the generator and the packer |
+| `docs/` | plan, organizer rules and Q&A, metric notes |
+| `vendor/` | organizer code as released: training/eval kit, baseline pipeline, demo submission |
 
-Weights never go into git. Move checkpoints between machines (5090s and Colab) via a private HF repo.
-Demo weights can be verified with `cd artifacts/demo_submission && sha256sum -c ../../vendor/demo_submission/weights.sha256`.
+`data/`, `runs/` and `artifacts/` hold datasets, checkpoints and built ZIPs; they are not tracked.
 
-## Workflow
+## Usage
 
-1. Generate data: `python submission/generate_dataset.py --input data/raw --output data/gen/<name> --config submission/config.yaml`
-2. Train and evaluate with the kit in `vendor/participant/` (see its README), using a config from `configs/`; outputs go to `runs/<id>/`
-3. Log the run in `docs/experiments.md`
-4. Pack: `tools/pack_submission.py` builds `artifacts/<name>.zip` (code from `submission/` + weights, judge paths, bf16), then `tools/verify_submission.sh` checks it offline in the organizers' image (see `tools/README.md`)
+```bash
+# dev container from the organizers' image (see compose.yaml)
+cp .env.example .env && docker compose up -d --build && docker compose exec dev bash
+
+# raw data, then the dataset
+python tools/fetch_data.py
+python submission/generate_dataset.py --input /data/raw --output /data/gen/<name> --config submission/config.yaml
+
+# train with the kit in vendor/participant/ using a config from configs/, then pack the ZIP
+python tools/pack_submission.py --name <name> --from runs/<run>/submission --annotations /data/gen/<name>/annotations.jsonl
+
+# on the host: check the ZIP in a fresh offline container from the organizers' image
+tools/verify_submission.sh artifacts/<name>.zip --libero
+
+# tests
+python -m unittest discover -s tests
+```

@@ -49,9 +49,7 @@ SWEEP = (0.3, 0.4, 0.5, 0.6)    # thresholds for the present-vs-absent table
 MIN_FRAME_STD = 8.0             # flatter frames are blank cameras
 TILE_H, COLS, ROWS = 360, 3, 4
 
-# ---------------------------------------------------------------------------------------------------------------------
 # Instruction parsing: "take the eggplant and put it between the two right burners" -> ["eggplant", "burner"]
-# ---------------------------------------------------------------------------------------------------------------------
 VERBS = {
     "pick", "picked", "lift", "lifted", "put", "place", "placed", "set", "move", "moved", "take", "took", "taken",
     "grab", "grabbed", "get", "got", "bring", "brought", "open", "opened", "close", "closed", "fold", "folded",
@@ -107,9 +105,7 @@ def instruction_names(task: str, exclude=DEFAULT_EXCLUDE, max_words: int = 4) ->
     return names
 
 
-# ---------------------------------------------------------------------------------------------------------------------
 # Closed dictionary (aijgen.scene.vocab)
-# ---------------------------------------------------------------------------------------------------------------------
 def mapped_names(task: str, entries: dict[str, Entry], exclude) -> tuple[list[str], list[str]]:
     """(dictionary names of the instruction's objects, instruction names that map to nothing)."""
     mapped, unmapped = [], []
@@ -122,9 +118,7 @@ def mapped_names(task: str, entries: dict[str, Entry], exclude) -> tuple[list[st
     return mapped, unmapped
 
 
-# ---------------------------------------------------------------------------------------------------------------------
 # Data
-# ---------------------------------------------------------------------------------------------------------------------
 def first_camera(root: Path) -> str:
     feats = json.loads((root / "meta" / "info.json").read_text())["features"]
     return sorted(k for k, v in feats.items() if v.get("dtype") == "video")[0]
@@ -163,9 +157,7 @@ def coverage(root: Path, cam: str, entries, exclude) -> tuple[float, Counter]:
     return full / max(len(eps), 1), unmapped
 
 
-# ---------------------------------------------------------------------------------------------------------------------
 # Drawing
-# ---------------------------------------------------------------------------------------------------------------------
 FONT = cv2.FONT_HERSHEY_SIMPLEX
 PALETTE = [(0, 200, 0), (255, 140, 0), (0, 170, 255), (220, 0, 220), (0, 220, 220), (255, 60, 60), (150, 90, 255),
            (180, 220, 0)]  # RGB
@@ -229,9 +221,7 @@ def write_sheets(tiles: list[np.ndarray], stem: Path):
                     [cv2.IMWRITE_JPEG_QUALITY, 88])
 
 
-# ---------------------------------------------------------------------------------------------------------------------
 # Summary
-# ---------------------------------------------------------------------------------------------------------------------
 def summarize(records, selections, cover, timing, args) -> str:
     n = len(records)
     out = [f"frames: {n} ({', '.join(f'{k}={v}' for k, v in Counter(r['dataset'] for r in records).items())}), "
@@ -286,7 +276,6 @@ def summarize(records, selections, cover, timing, args) -> str:
     return "\n".join(out)
 
 
-# ---------------------------------------------------------------------------------------------------------------------
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--input", type=Path, default=REPO / "data" / "raw", help="root with one LeRobot dataset per folder")
